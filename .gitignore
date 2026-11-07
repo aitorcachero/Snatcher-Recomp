@@ -49,3 +49,4 @@ snatcher-recomp/extracted/
 snatcher_debug.log
 snatcher_log.txt
 update_segacd.py
+release_pkg/
