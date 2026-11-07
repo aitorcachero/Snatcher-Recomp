@@ -32,12 +32,19 @@ void snatcher_justifier_set_resolution(int width, int height) {
 
 void snatcher_justifier_update_mouse(int window_x, int window_y, int win_w, int win_h) {
     if (win_w <= 0 || win_h <= 0) return;
-    // Mapeo proporcional a coordenadas nativas de pantalla de Genesis (320x224)
-    int mapped_x = (window_x * 320) / win_w;
+    // En Snatcher (Mega-CD en H32), la resolución real del juego es 256x224.
+    // Si la ventana está en formato panorámico 16:9, el canvas es 398x224 y la imagen está centrada en [71..326].
+    int mapped_x;
+    if (win_w * 9 >= win_h * 15) { // Aspecto 16:9 o más ancho
+        int canvas_x = (window_x * 398) / win_w;
+        mapped_x = canvas_x - 71;
+    } else {
+        mapped_x = (window_x * 256) / win_w;
+    }
     int mapped_y = (window_y * 224) / win_h;
 
     if (mapped_x < 0) mapped_x = 0;
-    if (mapped_x > 319) mapped_x = 319;
+    if (mapped_x > 255) mapped_x = 255;
     if (mapped_y < 0) mapped_y = 0;
     if (mapped_y > 223) mapped_y = 223;
 

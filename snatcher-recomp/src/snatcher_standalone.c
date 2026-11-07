@@ -30,6 +30,18 @@ extern void snatcher_justifier_update_mouse(int window_x, int window_y, int win_
 extern void snatcher_justifier_button_down(int button);
 extern void snatcher_justifier_button_up(int button);
 
+typedef struct {
+    int fullscreen;
+    int window_scale;
+    int widescreen;
+    int linear_filter;
+    int volume;
+    int mouse_enabled;
+} SnatcherLauncherConfig;
+
+// Lanzador moderno estilo Revo
+extern int run_snatcher_modern_launcher(char *disc_path_io, size_t disc_path_cap, SnatcherLauncherConfig *cfg_out);
+
 static SegaCDMachine machine;
 static SegaCDWidescreen *widescreen = NULL;static void log_debug(const char *msg) {
     FILE *f = fopen("snatcher_debug.log", "a");
@@ -231,15 +243,6 @@ static int prepare_disc_image(const char *input_path, char *out_disc_path, size_
 
     return 0;
 }
-
-typedef struct {
-    int fullscreen;
-    int window_scale;
-    int widescreen;
-    int linear_filter;
-    int volume;
-    int mouse_enabled;
-} SnatcherLauncherConfig;
 
 static int run_snatcher_launcher(char *disc_path_io, size_t disc_path_cap, SnatcherLauncherConfig *cfg_out) {
     RecompLauncherCSettings ls;
@@ -457,19 +460,6 @@ int main(int argc, char **argv) {
         }
     }
 
-    // 1f. Si aun no se encuentra, abrir selector de archivos de Windows
-    if (disc_path[0] == '\0') {
-        char picked[MAX_PATH] = { 0 };
-        if (prompt_select_file("Selecciona la imagen de Snatcher (.sgcd, .cue, .bin)",
-                               "Imagenes Sega CD (*.sgcd;*.cue;*.bin)\0*.sgcd;*.cue;*.bin\0Todos (*.*)\0*.*\0",
-                               picked, sizeof(picked))) {
-            char prepared[MAX_PATH] = { 0 };
-            if (prepare_disc_image(picked, prepared, sizeof(prepared))) {
-                strncpy(disc_path, prepared, sizeof(disc_path) - 1);
-            }
-        }
-    }
-
     char buf[1024];
     snprintf(buf, sizeof(buf), "Disc path resolved: [%s]", disc_path);
     log_debug(buf);
@@ -534,7 +524,57 @@ int main(int argc, char **argv) {
         }
     }
 
-    // Si no se encuentra, abrir selector de archivos
+    snprintf(buf, sizeof(buf), "BIOS auto-check: [%s]", bios_path);
+    log_debug(buf);
+
+    // 2b. Launcher moderno con configuracion de resolución, controles, audio y mejoras
+    SnatcherLauncherConfig launcher_cfg = {
+        .fullscreen = 0,
+        .window_scale = 3,
+        .widescreen = 1,
+        .linear_filter = 1,
+        .volume = 100,
+        .mouse_enabled = 1
+    };
+
+    if (!no_launcher && max_frames == 0) {
+        log_debug("Step 2b: Showing Recomp Launcher UI...");
+        int lr = run_snatcher_modern_launcher(disc_path, sizeof(disc_path), &launcher_cfg);
+        if (lr == 1) { // RECOMP_LAUNCHER_RESULT_QUIT
+            log_debug("Launcher closed by user.");
+            return 0;
+        }
+        if (disc_path[0] != '\0') {
+            char prepared[MAX_PATH] = { 0 };
+            if (prepare_disc_image(disc_path, prepared, sizeof(prepared))) {
+                strncpy(disc_path, prepared, sizeof(disc_path) - 1);
+            }
+        }
+    }
+
+    if (disc_path[0] == '\0') {
+        char picked[MAX_PATH] = { 0 };
+        if (prompt_select_file("Selecciona la imagen de Snatcher (.sgcd, .cue, .bin)",
+                               "Imagenes Sega CD (*.sgcd;*.cue;*.bin)\0*.sgcd;*.cue;*.bin\0Todos (*.*)\0*.*\0",
+                               picked, sizeof(picked))) {
+            char prepared[MAX_PATH] = { 0 };
+            if (prepare_disc_image(picked, prepared, sizeof(prepared))) {
+                strncpy(disc_path, prepared, sizeof(disc_path) - 1);
+            }
+        }
+    }
+
+    if (disc_path[0] == '\0') {
+        log_debug("ERROR: Disc path is empty!");
+        MessageBoxA(NULL,
+            "MegaCD-Recomp requiere la imagen de disco de Snatcher.\n\n"
+            "Por favor, copia tus archivos SNATCHER.CUE y SNATCHER.BIN\n"
+            "dentro de la carpeta 'disc/' o selecciónalos en el lanzador.",
+            "MegaCD-Recomp — Imagen de disco requerida", MB_ICONWARNING);
+        return 1;
+    }
+
+    // Comprobar BIOS después del launcher si aún no se tiene
     if (bios_path[0] == '\0') {
         char picked[MAX_PATH] = { 0 };
         if (prompt_select_file("Selecciona el archivo BIOS de Sega CD (128 KB)",
@@ -549,9 +589,6 @@ int main(int argc, char **argv) {
         }
     }
 
-    snprintf(buf, sizeof(buf), "BIOS path resolved: [%s]", bios_path);
-    log_debug(buf);
-
     if (bios_path[0] == '\0') {
         log_debug("ERROR: BIOS path is empty!");
         MessageBoxA(NULL,
@@ -559,41 +596,6 @@ int main(int argc, char **argv) {
             "Por favor, copia tu archivo de BIOS (ej: bios_CD_U.bin o us_scd1_9210.bin)\n"
             "dentro de la carpeta 'bios/' o 'snatcher-recomp/bios/' y vuelve a iniciar el juego.",
             "MegaCD-Recomp — Archivo de BIOS requerido", MB_ICONWARNING);
-        return 1;
-    }
-
-    // 2b. Launcher moderno con configuracion de resolución, controles, audio y mejoras
-    SnatcherLauncherConfig launcher_cfg = {
-        .fullscreen = 0,
-        .window_scale = 3,
-        .widescreen = 1,
-        .linear_filter = 1,
-        .volume = 100,
-        .mouse_enabled = 1
-    };
-
-    if (!no_launcher && max_frames == 0) {
-        log_debug("Step 2b: Showing Recomp Launcher UI...");
-        int lr = run_snatcher_launcher(disc_path, sizeof(disc_path), &launcher_cfg);
-        if (lr == 1) { // RECOMP_LAUNCHER_RESULT_QUIT
-            log_debug("Launcher closed by user.");
-            return 0;
-        }
-        if (disc_path[0] != '\0') {
-            char prepared[MAX_PATH] = { 0 };
-            if (prepare_disc_image(disc_path, prepared, sizeof(prepared))) {
-                strncpy(disc_path, prepared, sizeof(disc_path) - 1);
-            }
-        }
-    }
-
-    if (disc_path[0] == '\0') {
-        log_debug("ERROR: Disc path is empty!");
-        MessageBoxA(NULL,
-            "MegaCD-Recomp requiere la imagen de disco de Snatcher.\n\n"
-            "Por favor, copia tus archivos SNATCHER.CUE y SNATCHER.BIN\n"
-            "dentro de la carpeta 'disc/' y vuelve a iniciar el juego.",
-            "MegaCD-Recomp — Imagen de disco requerida", MB_ICONWARNING);
         return 1;
     }
 
@@ -676,7 +678,8 @@ int main(int argc, char **argv) {
     // 7. Creacion de la ventana de juego
     log_debug("Step 7: Creating SDL window...");
     int scale = launcher_cfg.window_scale > 0 ? launcher_cfg.window_scale : 3;
-    int base_w = launcher_cfg.widescreen ? 426 : 320;
+    // Para altura vertical 224, la relación 16:9 exacta es 398 (224*16/9 ≈ 398)
+    int base_w = launcher_cfg.widescreen ? 398 : 298;
     int base_h = 224;
     int win_w = base_w * scale;
     int win_h = base_h * scale;
@@ -738,11 +741,11 @@ int main(int argc, char **argv) {
         }
     }
 
-    // Modo Panorámico
+    // Modo Panorámico Widescreen
     if (launcher_cfg.widescreen) {
         widescreen = segacd_widescreen_create(&machine, segacd_standalone_program());
         if (widescreen) {
-            segacd_widescreen_prepare(widescreen, 426); // Relación 16:9 (320*16/9 ≈ 426)
+            segacd_widescreen_prepare(widescreen, 398); // 16:9 exacto para 224 líneas
         }
     } else {
         widescreen = NULL;
@@ -760,6 +763,17 @@ int main(int argc, char **argv) {
         while (SDL_PollEvent(&event)) {
             if (event.type == SDL_QUIT) {
                 quit = 1;
+            } else if (event.type == SDL_KEYDOWN) {
+                // Tecla Escape (Esc) para salir del juego
+                if (event.key.keysym.scancode == SDL_SCANCODE_ESCAPE) {
+                    quit = 1;
+                }
+            } else if (event.type == SDL_CONTROLLERBUTTONDOWN) {
+                // Botón Back o Guide en mando para salir del juego
+                if (event.cbutton.button == SDL_CONTROLLER_BUTTON_BACK ||
+                    event.cbutton.button == SDL_CONTROLLER_BUTTON_GUIDE) {
+                    quit = 1;
+                }
             } else if (event.type == SDL_CONTROLLERDEVICEADDED && !pad) {
                 pad = SDL_GameControllerOpen(event.cdevice.which);
             } else if (event.type == SDL_CONTROLLERDEVICEREMOVED && pad) {
@@ -914,7 +928,9 @@ int main(int argc, char **argv) {
 
         // Renderizado del fotograma
         if (presentation) {
-            unsigned frame_w = 320, frame_h = 224, pitch = GVDP_MAX_WIDTH * sizeof(uint32_t);
+            unsigned game_w = machine.width ? machine.width : 256;
+            unsigned game_h = machine.height ? machine.height : 224;
+            unsigned frame_w = game_w, frame_h = game_h, pitch = GVDP_MAX_WIDTH * sizeof(uint32_t);
             const uint32_t *pixels = widescreen ?
                 segacd_widescreen_frame(widescreen, &frame_w, &frame_h, &pitch) :
                 &machine.pixels[0][0];

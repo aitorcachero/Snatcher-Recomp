@@ -53,31 +53,39 @@ const uint32_t *segacd_widescreen_frame(SegaCDWidescreen *ws, unsigned *width,
                                        unsigned *height, unsigned *pitch) {
     if (!ws || !ws->machine) return NULL;
     
-    // Si la anchura es estándar (320), devuelve el framebuffer nativo directamente
-    if (ws->width == 320) {
-        if (width) *width = 320;
-        if (height) *height = 224;
+    unsigned game_w = ws->machine->width ? ws->machine->width : 256;
+    unsigned game_h = ws->machine->height ? ws->machine->height : 224;
+
+    // Si está en modo nativo 4:3 o ancho no expandido, devolver el buffer nativo exacto
+    if (ws->width <= game_w || ws->state == SEGACD_WIDESCREEN_NATIVE) {
+        if (width) *width = game_w;
+        if (height) *height = game_h;
         if (pitch) *pitch = sizeof(uint32_t) * GVDP_MAX_WIDTH;
         ws->original_frames++;
         return &ws->machine->pixels[0][0];
     }
 
-    // Modo Panorámico Widescreen (16:9 / 21:9):
-    // Centra la imagen de 320x224 en el canvas panorámico con marco de relleno
-    unsigned canvas_w = ws->width;
-    unsigned canvas_h = 224;
-    unsigned offset_x = (canvas_w - 320) / 2;
+    // Modo Panorámico Widescreen (16:9):
+    // Con resolución vertical de 224 píxeles, la relación 16:9 exacta es:
+    // 224 * 16 / 9 = 398.222... -> 398 píxeles de anchura total.
+    unsigned canvas_w = ws->width > 0 ? ws->width : 398;
+    if (canvas_w > GVDP_MAX_WIDTH) canvas_w = GVDP_MAX_WIDTH;
+    if (canvas_w < game_w) canvas_w = game_w;
 
-    for (unsigned y = 0; y < canvas_h; y++) {
-        // Relleno de fondo cinemático izquierdo
+    unsigned canvas_h = game_h;
+    // Centrado perfecto de los 256 píxeles reales del juego
+    unsigned offset_x = (canvas_w - game_w) / 2;
+
+    for (unsigned y = 0; y < canvas_h && y < 240; y++) {
+        // Marco cinemático izquierdo (negro puro)
         for (unsigned x = 0; x < offset_x; x++) {
-            ws->canvas[y][x] = 0xFF080808; // Color negro/gris cinemático
+            ws->canvas[y][x] = 0xFF000000;
         }
-        // Copia de los píxeles nativos del VDP centrados
-        memcpy(&ws->canvas[y][offset_x], &ws->machine->pixels[y][0], 320 * sizeof(uint32_t));
-        // Relleno de fondo cinemático derecho
-        for (unsigned x = offset_x + 320; x < canvas_w; x++) {
-            ws->canvas[y][x] = 0xFF080808;
+        // Copia de los píxeles reales del juego (256 píxeles centrados)
+        memcpy(&ws->canvas[y][offset_x], &ws->machine->pixels[y][0], game_w * sizeof(uint32_t));
+        // Marco cinemático derecho (negro puro)
+        for (unsigned x = offset_x + game_w; x < canvas_w; x++) {
+            ws->canvas[y][x] = 0xFF000000;
         }
     }
 
