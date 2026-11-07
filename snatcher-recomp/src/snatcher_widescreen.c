@@ -66,26 +66,20 @@ const uint32_t *segacd_widescreen_frame(SegaCDWidescreen *ws, unsigned *width,
     }
 
     // Modo Panorámico Widescreen (16:9):
-    // Con resolución vertical de 224 píxeles, la relación 16:9 exacta es:
-    // 224 * 16 / 9 = 398.222... -> 398 píxeles de anchura total.
+    // Con resolución vertical de 224 píxeles, la relación 16:9 exacta es 398 píxeles (224 * 16 / 9 ≈ 398).
+    // Para el formato panorámico 16:9, escalamos horizontalmente los 256 píxeles del juego
+    // a lo largo de todo el ancho del lienzo (398 píxeles) para llenar completamente la pantalla sin barras negras laterales.
     unsigned canvas_w = ws->width > 0 ? ws->width : 398;
     if (canvas_w > GVDP_MAX_WIDTH) canvas_w = GVDP_MAX_WIDTH;
     if (canvas_w < game_w) canvas_w = game_w;
 
     unsigned canvas_h = game_h;
-    // Centrado perfecto de los 256 píxeles reales del juego
-    unsigned offset_x = (canvas_w - game_w) / 2;
 
     for (unsigned y = 0; y < canvas_h && y < 240; y++) {
-        // Marco cinemático izquierdo (negro puro)
-        for (unsigned x = 0; x < offset_x; x++) {
-            ws->canvas[y][x] = 0xFF000000;
-        }
-        // Copia de los píxeles reales del juego (256 píxeles centrados)
-        memcpy(&ws->canvas[y][offset_x], &ws->machine->pixels[y][0], game_w * sizeof(uint32_t));
-        // Marco cinemático derecho (negro puro)
-        for (unsigned x = offset_x + game_w; x < canvas_w; x++) {
-            ws->canvas[y][x] = 0xFF000000;
+        for (unsigned x = 0; x < canvas_w; x++) {
+            unsigned src_x = (x * game_w) / canvas_w;
+            if (src_x >= game_w) src_x = game_w - 1;
+            ws->canvas[y][x] = ws->machine->pixels[y][src_x];
         }
     }
 

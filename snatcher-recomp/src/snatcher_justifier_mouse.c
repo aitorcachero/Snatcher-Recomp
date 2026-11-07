@@ -30,16 +30,20 @@ void snatcher_justifier_set_resolution(int width, int height) {
     if (height > 0) g_justifier.screen_height = height;
 }
 
-void snatcher_justifier_update_mouse(int window_x, int window_y, int win_w, int win_h) {
+void snatcher_justifier_update_mouse(int window_x, int window_y, int win_w, int win_h, int is_widescreen) {
     if (win_w <= 0 || win_h <= 0) return;
-    // En Snatcher (Mega-CD en H32), la resolución real del juego es 256x224.
-    // Si la ventana está en formato panorámico 16:9, el canvas es 398x224 y la imagen está centrada en [71..326].
     int mapped_x;
-    if (win_w * 9 >= win_h * 15) { // Aspecto 16:9 o más ancho
-        int canvas_x = (window_x * 398) / win_w;
-        mapped_x = canvas_x - 71;
-    } else {
+    if (is_widescreen) {
+        // En 16:9 panorámico, la imagen llena todo el ancho de la pantalla
         mapped_x = (window_x * 256) / win_w;
+    } else {
+        // En 4:3 clásico, la imagen se mantiene en 4:3 centrada con franjas negras a los lados
+        int view_w = (win_h * 4) / 3;
+        int bar_w = (win_w - view_w) / 2;
+        if (bar_w < 0) bar_w = 0;
+        if (window_x < bar_w) mapped_x = 0;
+        else if (window_x > win_w - bar_w) mapped_x = 255;
+        else mapped_x = ((window_x - bar_w) * 256) / (view_w > 0 ? view_w : 1);
     }
     int mapped_y = (window_y * 224) / win_h;
 

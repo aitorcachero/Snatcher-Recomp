@@ -82,6 +82,7 @@ extern "C" int run_snatcher_modern_launcher(char *disc_path_io, size_t disc_path
             if (sscanf(line, "fullscreen = %d", &v) == 1) fullscreen = v;
             else if (sscanf(line, "window_scale = %d", &v) == 1) window_scale = v;
             else if (sscanf(line, "widescreen = %d", &v) == 1) widescreen = v;
+            else if (sscanf(line, "view_mode = %d", &v) == 1) widescreen = (v != 0);
             else if (sscanf(line, "linear_filter = %d", &v) == 1) linear_filter = v;
             else if (sscanf(line, "volume = %d", &v) == 1) volume = v;
             else if (sscanf(line, "mouse_enabled = %d", &v) == 1) mouse_enabled = v;
@@ -129,6 +130,9 @@ extern "C" int run_snatcher_modern_launcher(char *disc_path_io, size_t disc_path
     SDL_GL_MakeCurrent(window, gl_context);
     SDL_GL_SetSwapInterval(1); // Activar VSync
 
+    SDL_Cursor *cursor_hand = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_HAND);
+    SDL_Cursor *cursor_arrow = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_ARROW);
+
     // Factor de escalado de interfaz relativo a 1080p
     float scale = (float)win_h / 1080.0f;
     if (scale < 0.80f) scale = 0.80f;
@@ -139,6 +143,7 @@ extern "C" int run_snatcher_modern_launcher(char *disc_path_io, size_t disc_path
     ImGui::CreateContext();
     ImGuiIO &io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;
     io.IniFilename = NULL; // No generar imgui.ini
 
     // Cargar tipografía moderna con escalado de alta definición
@@ -355,7 +360,7 @@ extern "C" int run_snatcher_modern_launcher(char *disc_path_io, size_t disc_path
         if (font_bold) ImGui::PopFont();
 
         if (font_regular) ImGui::PushFont(font_regular);
-        draw->AddText(ImVec2(28.0f * scale, win_h - 50.0f * scale), IM_COL32(148, 163, 184, 230), "PC Native Recompilation v1.0.1 • 60/144/240/360 Hz");
+        draw->AddText(ImVec2(28.0f * scale, win_h - 50.0f * scale), IM_COL32(148, 163, 184, 230), "PC Native Recompilation v1.0.2 • 60/144/240/360 Hz");
         if (font_regular) ImGui::PopFont();
 
         ImGui::EndChild();
@@ -490,11 +495,17 @@ extern "C" int run_snatcher_modern_launcher(char *disc_path_io, size_t disc_path
                 ImVec2 p_min = ImGui::GetCursorScreenPos();
                 ImVec2 p_max = ImVec2(p_min.x + card_w, p_min.y + card_h);
 
-                ImU32 bg_col = sel ? IM_COL32(20, 34, 58, 255) : IM_COL32(15, 23, 38, 255);
-                ImU32 border_col = sel ? IM_COL32(255, 115, 0, 255) : IM_COL32(40, 58, 90, 255);
+                bool clicked = ImGui::InvisibleButton("##card_btn", ImVec2(card_w, card_h));
+                bool card_hovered = ImGui::IsItemHovered();
+                if (card_hovered) {
+                    ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                }
+
+                ImU32 bg_col = sel ? IM_COL32(20, 34, 58, 255) : (card_hovered ? IM_COL32(22, 32, 52, 255) : IM_COL32(15, 23, 38, 255));
+                ImU32 border_col = sel ? IM_COL32(255, 115, 0, 255) : (card_hovered ? IM_COL32(255, 150, 40, 255) : IM_COL32(40, 58, 90, 255));
 
                 draw->AddRectFilled(p_min, p_max, bg_col, 8.0f * scale);
-                draw->AddRect(p_min, p_max, border_col, 8.0f * scale, 0, sel ? 2.5f * scale : 1.0f);
+                draw->AddRect(p_min, p_max, border_col, 8.0f * scale, 0, sel ? 2.5f * scale : (card_hovered ? 2.0f * scale : 1.0f));
 
                 if (cards[i].badge) {
                     if (font_small) ImGui::PushFont(font_small);
@@ -515,7 +526,7 @@ extern "C" int run_snatcher_modern_launcher(char *disc_path_io, size_t disc_path
                 draw->AddText(ImVec2(p_min.x + 14.0f * scale, p_min.y + text_y + 54.0f * scale), IM_COL32(100, 116, 139, 255), cards[i].sub2);
                 if (font_small) ImGui::PopFont();
 
-                if (ImGui::InvisibleButton("##card_btn", ImVec2(card_w, card_h))) {
+                if (clicked) {
                     active_preset = i;
                     if (i == 0) { // Modern
                         fullscreen = 1; window_scale = 3; widescreen = 1; linear_filter = 1; refresh_rate = 144;
@@ -787,6 +798,14 @@ extern "C" int run_snatcher_modern_launcher(char *disc_path_io, size_t disc_path
         ImGui::EndChild();
         ImGui::End();
 
+        // Actualizar cursor del ratón: mano interactiva sobre cualquier opción o botón
+        bool is_hovering = ImGui::IsAnyItemHovered() || ImGui::IsAnyItemActive() || (ImGui::GetMouseCursor() == ImGuiMouseCursor_Hand);
+        if (is_hovering) {
+            SDL_SetCursor(cursor_hand);
+        } else {
+            SDL_SetCursor(cursor_arrow);
+        }
+
         // Renderizado OpenGL3
         ImGui::Render();
         glViewport(0, 0, (int)io.DisplaySize.x, (int)io.DisplaySize.y);
@@ -807,6 +826,9 @@ extern "C" int run_snatcher_modern_launcher(char *disc_path_io, size_t disc_path
     SDL_GL_DeleteContext(gl_context);
     SDL_DestroyWindow(window);
 
+    if (cursor_hand) SDL_FreeCursor(cursor_hand);
+    if (cursor_arrow) SDL_FreeCursor(cursor_arrow);
+
     // Guardar ajustes seleccionados en settings.toml
     fset = fopen("settings.toml", "w");
     if (fset) {
@@ -814,6 +836,7 @@ extern "C" int run_snatcher_modern_launcher(char *disc_path_io, size_t disc_path
         fprintf(fset, "fullscreen = %d\n", fullscreen);
         fprintf(fset, "window_scale = %d\n", window_scale);
         fprintf(fset, "widescreen = %d\n", widescreen);
+        fprintf(fset, "view_mode = %d\n", widescreen ? 1 : 0);
         fprintf(fset, "linear_filter = %d\n", linear_filter);
         fprintf(fset, "volume = %d\n", volume);
         fprintf(fset, "mouse_enabled = %d\n", mouse_enabled);

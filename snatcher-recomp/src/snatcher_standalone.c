@@ -26,7 +26,7 @@ extern int segacd_standalone_accept_disc(const uint8_t *sha256);
 
 // Hook para raton Konami Justifier
 extern void snatcher_justifier_set_resolution(int width, int height);
-extern void snatcher_justifier_update_mouse(int window_x, int window_y, int win_w, int win_h);
+extern void snatcher_justifier_update_mouse(int window_x, int window_y, int win_w, int win_h, int is_widescreen);
 extern void snatcher_justifier_button_down(int button);
 extern void snatcher_justifier_button_up(int button);
 
@@ -271,6 +271,7 @@ static int run_snatcher_launcher(char *disc_path_io, size_t disc_path_cap, Snatc
             if (sscanf(line, "fullscreen = %d", &v) == 1) ls.fullscreen = v;
             else if (sscanf(line, "window_scale = %d", &v) == 1) ls.window_scale = v;
             else if (sscanf(line, "widescreen = %d", &v) == 1) ls.widescreen = v;
+            else if (sscanf(line, "view_mode = %d", &v) == 1) ls.widescreen = (v != 0);
             else if (sscanf(line, "linear_filter = %d", &v) == 1) ls.linear_filter = v;
             else if (sscanf(line, "volume = %d", &v) == 1) ls.volume = v;
         }
@@ -320,6 +321,7 @@ static int run_snatcher_launcher(char *disc_path_io, size_t disc_path_cap, Snatc
         fprintf(fset, "fullscreen = %d\n", ls.fullscreen);
         fprintf(fset, "window_scale = %d\n", ls.window_scale);
         fprintf(fset, "widescreen = %d\n", ls.widescreen);
+        fprintf(fset, "view_mode = %d\n", ls.widescreen ? 1 : 0);
         fprintf(fset, "linear_filter = %d\n", ls.linear_filter);
         fprintf(fset, "volume = %d\n", ls.volume);
         fclose(fset);
@@ -805,7 +807,7 @@ int main(int argc, char **argv) {
                 snatcher_justifier_set_resolution(win_w, win_h);
             } else if (event.type == SDL_MOUSEMOTION) {
                 if (launcher_cfg.mouse_enabled) {
-                    snatcher_justifier_update_mouse(event.motion.x, event.motion.y, win_w, win_h);
+                    snatcher_justifier_update_mouse(event.motion.x, event.motion.y, win_w, win_h, launcher_cfg.widescreen);
                 }
             } else if (event.type == SDL_MOUSEBUTTONDOWN) {
                 if (launcher_cfg.mouse_enabled) {
