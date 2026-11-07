@@ -34,11 +34,16 @@ typedef struct {
     int fullscreen;
     int window_scale;
     int widescreen;
-    int linear_filter;
+    int linear_filter;    // 0: Sharp, 1: Smooth, 2: CRT Scanlines
     int volume;
     int mouse_enabled;
-    int refresh_rate;
+    int refresh_rate;     // 0: Auto (monitor Hz), 60, 144, 240, 360
+    int vsync;            // 0: Off, 1: On
+    int integer_scaling;  // 0: Off, 1: On
+    int color_mode;       // 0: Raw original, 1: As on a TV (CRT phosphor warm gamma)
 } SnatcherLauncherConfig;
+
+extern void segacd_widescreen_set_effects(SegaCDWidescreen *ws, int color_mode, int crt_scanlines);
 
 // Lanzador moderno estilo Revo
 extern int run_snatcher_modern_launcher(char *disc_path_io, size_t disc_path_cap, SnatcherLauncherConfig *cfg_out);
@@ -274,6 +279,10 @@ static int run_snatcher_launcher(char *disc_path_io, size_t disc_path_cap, Snatc
             else if (sscanf(line, "view_mode = %d", &v) == 1) ls.widescreen = (v != 0);
             else if (sscanf(line, "linear_filter = %d", &v) == 1) ls.linear_filter = v;
             else if (sscanf(line, "volume = %d", &v) == 1) ls.volume = v;
+            else if (sscanf(line, "vsync = %d", &v) == 1) { if (cfg_out) cfg_out->vsync = v; }
+            else if (sscanf(line, "integer_scaling = %d", &v) == 1) { if (cfg_out) cfg_out->integer_scaling = v; }
+            else if (sscanf(line, "color_mode = %d", &v) == 1) { if (cfg_out) cfg_out->color_mode = v; }
+            else if (sscanf(line, "refresh_rate = %d", &v) == 1) { if (cfg_out) cfg_out->refresh_rate = v; }
         }
         fclose(fset);
     }
@@ -538,7 +547,10 @@ int main(int argc, char **argv) {
         .linear_filter = 1,
         .volume = 100,
         .mouse_enabled = 1,
-        .refresh_rate = 60
+        .refresh_rate = 0, // Auto: adapta a los hercios del monitor
+        .vsync = 1,
+        .integer_scaling = 0,
+        .color_mode = 1 // Colores como en TV por defecto
     };
 
     if (!no_launcher && max_frames == 0) {
@@ -707,15 +719,24 @@ int main(int argc, char **argv) {
     }
     log_debug("SDL window created OK.");
 
-    int target_hz = launcher_cfg.refresh_rate;
-    if (target_hz != 60 && target_hz != 144 && target_hz != 240 && target_hz != 360) {
-        target_hz = 60;
+    int monitor_hz = 60;
+    SDL_DisplayMode dm;
+    int display_idx = SDL_GetWindowDisplayIndex(window);
+    if (display_idx < 0) display_idx = 0;
+    if (SDL_GetCurrentDisplayMode(display_idx, &dm) == 0 && dm.refresh_rate > 0) {
+        monitor_hz = dm.refresh_rate;
     }
-    snprintf(buf, sizeof(buf), "Selected display refresh rate: %d Hz", target_hz);
+
+    int target_hz = launcher_cfg.refresh_rate;
+    if (target_hz <= 0) {
+        target_hz = monitor_hz;
+    }
+    snprintf(buf, sizeof(buf), "Selected display refresh rate: %d Hz (Monitor native: %d Hz, %s)",
+             target_hz, monitor_hz, launcher_cfg.refresh_rate <= 0 ? "Auto" : "Manual");
     log_debug(buf);
 
     Uint32 rend_flags = SDL_RENDERER_ACCELERATED;
-    if (target_hz == 60) {
+    if (launcher_cfg.vsync) {
         rend_flags |= SDL_RENDERER_PRESENTVSYNC;
     }
     SDL_Renderer *renderer = SDL_CreateRenderer(window, -1, rend_flags);
@@ -731,11 +752,18 @@ int main(int argc, char **argv) {
     }
     log_debug("Renderer created OK.");
 
+    SDL_RenderSetIntegerScale(renderer, launcher_cfg.integer_scaling ? SDL_TRUE : SDL_FALSE);
+    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, (launcher_cfg.linear_filter == 1) ? "1" : "0");
+
     SegaCDPresentation *presentation = segacd_presentation_create(window, renderer, settings_path, 0);
     if (!presentation) {
         log_debug("segacd_presentation_create failed!");
     } else {
         log_debug("Presentation created OK.");
+    }
+    if (presentation) {
+        log_debug("Presentation created OK.");
+        SDL_RenderSetIntegerScale(renderer, launcher_cfg.integer_scaling ? SDL_TRUE : SDL_FALSE);
     }
 
     // Restaurar título y tamaño tras presentation_create
@@ -756,14 +784,11 @@ int main(int argc, char **argv) {
         }
     }
 
-    // Modo Panorámico Widescreen
-    if (launcher_cfg.widescreen) {
-        widescreen = segacd_widescreen_create(&machine, segacd_standalone_program());
-        if (widescreen) {
-            segacd_widescreen_prepare(widescreen, 398); // 16:9 exacto para 224 líneas
-        }
-    } else {
-        widescreen = NULL;
+    // Modo Panorámico Widescreen y Efectos Visuales (Colores TV y Scanlines CRT)
+    widescreen = segacd_widescreen_create(&machine, segacd_standalone_program());
+    if (widescreen) {
+        segacd_widescreen_prepare(widescreen, launcher_cfg.widescreen ? 398 : 256);
+        segacd_widescreen_set_effects(widescreen, launcher_cfg.color_mode, (launcher_cfg.linear_filter == 2));
     }
 
     snatcher_justifier_set_resolution(win_w, win_h);

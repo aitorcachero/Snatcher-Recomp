@@ -20,10 +20,13 @@ typedef struct {
     int fullscreen;
     int window_scale;
     int widescreen;
-    int linear_filter;
+    int linear_filter;    // 0: Sharp, 1: Smooth, 2: CRT Scanlines
     int volume;
     int mouse_enabled;
-    int refresh_rate;
+    int refresh_rate;     // 0: Auto (monitor Hz), 60, 144, 240, 360
+    int vsync;            // 0: Off, 1: On
+    int integer_scaling;  // 0: Off, 1: On
+    int color_mode;       // 0: Raw original, 1: As on a TV
 } SnatcherLauncherConfig;
 
 static bool prompt_browse_disc(char *out_path, size_t max_len) {
@@ -69,10 +72,13 @@ extern "C" int run_snatcher_modern_launcher(char *disc_path_io, size_t disc_path
     int fullscreen = 1;
     int window_scale = 3;
     int widescreen = 1;
-    int linear_filter = 1;
+    int linear_filter = 1; // 0: Sharp, 1: Smooth, 2: CRT Scanlines
     int volume = 100;
     int mouse_enabled = 1;
-    int refresh_rate = 60;
+    int refresh_rate = 0; // 0: Auto (adapta a los hercios del monitor)
+    int vsync = 1; // 1: VSync activado
+    int integer_scaling = 0; // 0: Off, 1: On
+    int color_mode = 1; // 1: As on a TV (cálido CRT)
 
     FILE *fset = fopen("settings.toml", "r");
     if (fset) {
@@ -83,7 +89,11 @@ extern "C" int run_snatcher_modern_launcher(char *disc_path_io, size_t disc_path
             else if (sscanf(line, "window_scale = %d", &v) == 1) window_scale = v;
             else if (sscanf(line, "widescreen = %d", &v) == 1) widescreen = v;
             else if (sscanf(line, "view_mode = %d", &v) == 1) widescreen = (v != 0);
+            else if (sscanf(line, "vsync = %d", &v) == 1) vsync = v;
+            else if (sscanf(line, "filter = %d", &v) == 1) linear_filter = v;
             else if (sscanf(line, "linear_filter = %d", &v) == 1) linear_filter = v;
+            else if (sscanf(line, "integer_scaling = %d", &v) == 1) integer_scaling = v;
+            else if (sscanf(line, "color_mode = %d", &v) == 1) color_mode = v;
             else if (sscanf(line, "volume = %d", &v) == 1) volume = v;
             else if (sscanf(line, "mouse_enabled = %d", &v) == 1) mouse_enabled = v;
             else if (sscanf(line, "refresh_rate = %d", &v) == 1) refresh_rate = v;
@@ -125,6 +135,12 @@ extern "C" int run_snatcher_modern_launcher(char *disc_path_io, size_t disc_path
     if (!window) return 2;
 
     SDL_GetWindowSize(window, &win_w, &win_h);
+
+    int detected_hz = (dm.refresh_rate > 0) ? dm.refresh_rate : 60;
+    int disp_idx = SDL_GetWindowDisplayIndex(window);
+    if (disp_idx >= 0 && SDL_GetCurrentDisplayMode(disp_idx, &dm) == 0 && dm.refresh_rate > 0) {
+        detected_hz = dm.refresh_rate;
+    }
 
     SDL_GLContext gl_context = SDL_GL_CreateContext(window);
     SDL_GL_MakeCurrent(window, gl_context);
@@ -360,7 +376,7 @@ extern "C" int run_snatcher_modern_launcher(char *disc_path_io, size_t disc_path
         if (font_bold) ImGui::PopFont();
 
         if (font_regular) ImGui::PushFont(font_regular);
-        draw->AddText(ImVec2(28.0f * scale, win_h - 50.0f * scale), IM_COL32(148, 163, 184, 230), "PC Native Recompilation v1.0.2 • 60/144/240/360 Hz");
+        draw->AddText(ImVec2(28.0f * scale, win_h - 50.0f * scale), IM_COL32(148, 163, 184, 230), "PC Native Recompilation v1.0.3 • Auto / 60 / 144 / 240 / 360 Hz");
         if (font_regular) ImGui::PopFont();
 
         ImGui::EndChild();
@@ -529,11 +545,11 @@ extern "C" int run_snatcher_modern_launcher(char *disc_path_io, size_t disc_path
                 if (clicked) {
                     active_preset = i;
                     if (i == 0) { // Modern
-                        fullscreen = 1; window_scale = 3; widescreen = 1; linear_filter = 1; refresh_rate = 144;
+                        fullscreen = 1; window_scale = 3; widescreen = 1; linear_filter = 1; vsync = 1; refresh_rate = 0; integer_scaling = 0; color_mode = 1;
                     } else if (i == 1) { // Steam Deck
-                        fullscreen = 1; window_scale = 2; widescreen = 1; linear_filter = 1; refresh_rate = 60;
+                        fullscreen = 1; window_scale = 2; widescreen = 1; linear_filter = 1; vsync = 1; refresh_rate = 60; integer_scaling = 0; color_mode = 1;
                     } else if (i == 2) { // Original 1994
-                        fullscreen = 0; window_scale = 3; widescreen = 0; linear_filter = 0; refresh_rate = 60;
+                        fullscreen = 0; window_scale = 3; widescreen = 0; linear_filter = 0; vsync = 1; refresh_rate = 60; integer_scaling = 1; color_mode = 1;
                     }
                 }
                 ImGui::PopID();
@@ -590,91 +606,199 @@ extern "C" int run_snatcher_modern_launcher(char *disc_path_io, size_t disc_path
             // Frecuencia de Refresco / Tasa de Hz (60, 144, 240, 360)
             ImGui::TextColored(ImVec4(0.75f, 0.80f, 0.90f, 1.0f), "Tasa de Refresco (Hz):");
             ImGui::SameLine(280.0f * scale);
-            int hz_options[] = { 60, 144, 240, 360 };
-            for (int h = 0; h < 4; h++) {
-                if (h > 0) ImGui::SameLine(0, 10.0f * scale);
+            int hz_options[] = { 60, 144, 240, 360, 0 };
+            for (int h = 0; h < 5; h++) {
+                if (h > 0) ImGui::SameLine(0, 8.0f * scale);
                 bool is_cur = (refresh_rate == hz_options[h]);
-                char hlabel[32];
-                snprintf(hlabel, sizeof(hlabel), "%d Hz##hz_play_%d", hz_options[h], hz_options[h]);
+                char hlabel[48];
+                if (hz_options[h] == 0) {
+                    snprintf(hlabel, sizeof(hlabel), "Auto (%d Hz)##hz_play_auto", detected_hz);
+                } else {
+                    snprintf(hlabel, sizeof(hlabel), "%d Hz##hz_play_%d", hz_options[h], hz_options[h]);
+                }
+                float btn_w = (hz_options[h] == 0) ? 140.0f * scale : 75.0f * scale;
                 if (is_cur) {
                     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(1.0f, 0.45f, 0.0f, 0.95f));
-                    ImGui::Button(hlabel, ImVec2(80.0f * scale, 36.0f * scale));
+                    ImGui::Button(hlabel, ImVec2(btn_w, 36.0f * scale));
                     ImGui::PopStyleColor();
                 } else {
-                    if (ImGui::Button(hlabel, ImVec2(80.0f * scale, 36.0f * scale))) {
+                    if (ImGui::Button(hlabel, ImVec2(btn_w, 36.0f * scale))) {
                         refresh_rate = hz_options[h];
                         active_preset = 3;
                     }
                 }
             }
-            ImGui::TextColored(ImVec4(0.55f, 0.63f, 0.74f, 1.0f), "Sincronización nativa de pantalla y ratón: 60Hz estándar, 144Hz / 240Hz gaming o 360Hz esports.");
+            ImGui::TextColored(ImVec4(0.55f, 0.63f, 0.74f, 1.0f), "Sincronización nativa de pantalla y ratón: 60Hz estándar, 144/240/360Hz gaming, o Auto (%d Hz de tu monitor).", detected_hz);
             if (font_regular) ImGui::PopFont();
         }
 
         // ── CONTENIDO: TAB 1: PICTURE (PANTALLA) ────────────────────────────
         else if (active_tab == 1) {
             if (font_large) ImGui::PushFont(font_large);
-            ImGui::TextColored(ImVec4(0.90f, 0.93f, 0.98f, 1.0f), "Configuración de Pantalla y Gráficos");
+            ImGui::TextColored(ImVec4(0.90f, 0.93f, 0.98f, 1.0f), "Ajustes de Pantalla (Display & Motion)");
             if (font_large) ImGui::PopFont();
-            ImGui::Dummy(ImVec2(0, 10.0f * scale));
+            ImGui::Dummy(ImVec2(0, 6.0f * scale));
 
             if (font_regular) ImGui::PushFont(font_regular);
-            // Escala de ventana
-            ImGui::Text("Escala de ventana / Resolución interna:");
-            const char *scales[] = { "1x (256x224 Nativo)", "2x (720p)", "3x (1080p Full HD)", "4x (1440p 2K QHD)", "5x (2160p 4K UHD)" };
+
+            // ── Bloque 1: DISPLAY ──
+            if (font_bold) ImGui::PushFont(font_bold);
+            ImGui::TextColored(ImVec4(1.0f, 0.50f, 0.05f, 1.0f), "Display");
+            if (font_bold) ImGui::PopFont();
+
+            // 1. Fullscreen
+            ImGui::Text("Fullscreen (Pantalla completa):");
+            ImGui::SameLine(320.0f * scale);
+            if (fullscreen) {
+                if (ImGui::Button("Off##fs_off", ImVec2(75.0f * scale, 30.0f * scale))) { fullscreen = 0; active_preset = 3; }
+                ImGui::SameLine();
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(1.0f, 0.45f, 0.0f, 0.95f));
+                ImGui::Button("On##fs_on", ImVec2(75.0f * scale, 30.0f * scale));
+                ImGui::PopStyleColor();
+            } else {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.28f, 0.42f, 0.95f));
+                ImGui::Button("Off##fs_off", ImVec2(75.0f * scale, 30.0f * scale));
+                ImGui::PopStyleColor();
+                ImGui::SameLine();
+                if (ImGui::Button("On##fs_on", ImVec2(75.0f * scale, 30.0f * scale))) { fullscreen = 1; active_preset = 3; }
+            }
+
+            // 2. VSync
+            ImGui::Text("VSync (Sincronización vertical):");
+            ImGui::SameLine(320.0f * scale);
+            if (vsync) {
+                if (ImGui::Button("Off##vs_off", ImVec2(75.0f * scale, 30.0f * scale))) { vsync = 0; active_preset = 3; }
+                ImGui::SameLine();
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(1.0f, 0.45f, 0.0f, 0.95f));
+                ImGui::Button("On##vs_on", ImVec2(75.0f * scale, 30.0f * scale));
+                ImGui::PopStyleColor();
+            } else {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.28f, 0.42f, 0.95f));
+                ImGui::Button("Off##vs_off", ImVec2(75.0f * scale, 30.0f * scale));
+                ImGui::PopStyleColor();
+                ImGui::SameLine();
+                if (ImGui::Button("On##vs_on", ImVec2(75.0f * scale, 30.0f * scale))) { vsync = 1; active_preset = 3; }
+            }
+
+            // 3. Aspect
+            ImGui::Text("Aspect (Relación de aspecto):");
+            ImGui::SameLine(320.0f * scale);
+            if (widescreen) {
+                if (ImGui::Button("4:3 TV##asp_43", ImVec2(90.0f * scale, 30.0f * scale))) { widescreen = 0; active_preset = 3; }
+                ImGui::SameLine();
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(1.0f, 0.45f, 0.0f, 0.95f));
+                ImGui::Button("16:9##asp_169", ImVec2(90.0f * scale, 30.0f * scale));
+                ImGui::PopStyleColor();
+            } else {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.28f, 0.42f, 0.95f));
+                ImGui::Button("4:3 TV##asp_43", ImVec2(90.0f * scale, 30.0f * scale));
+                ImGui::PopStyleColor();
+                ImGui::SameLine();
+                if (ImGui::Button("16:9##asp_169", ImVec2(90.0f * scale, 30.0f * scale))) { widescreen = 1; active_preset = 3; }
+            }
+
+            // 4. Filter
+            ImGui::Text("Filter (Filtro gráfico):");
+            ImGui::SameLine(320.0f * scale);
+            const char *filter_labels[] = { "Sharp (Nítido)", "Smooth (Suave)", "CRT Scanlines" };
+            for (int f = 0; f < 3; f++) {
+                if (f > 0) ImGui::SameLine();
+                bool f_cur = (linear_filter == f);
+                float f_w = (f == 2) ? 140.0f * scale : 120.0f * scale;
+                if (f_cur) {
+                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(1.0f, 0.45f, 0.0f, 0.95f));
+                    ImGui::Button(filter_labels[f], ImVec2(f_w, 30.0f * scale));
+                    ImGui::PopStyleColor();
+                } else {
+                    if (ImGui::Button(filter_labels[f], ImVec2(f_w, 30.0f * scale))) {
+                        linear_filter = f;
+                        active_preset = 3;
+                    }
+                }
+            }
+
+            // 5. Integer Scaling
+            ImGui::Text("Integer scaling (Escalado entero):");
+            ImGui::SameLine(320.0f * scale);
+            if (integer_scaling) {
+                if (ImGui::Button("Off##is_off", ImVec2(75.0f * scale, 30.0f * scale))) { integer_scaling = 0; active_preset = 3; }
+                ImGui::SameLine();
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(1.0f, 0.45f, 0.0f, 0.95f));
+                ImGui::Button("On##is_on", ImVec2(75.0f * scale, 30.0f * scale));
+                ImGui::PopStyleColor();
+            } else {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.28f, 0.42f, 0.95f));
+                ImGui::Button("Off##is_off", ImVec2(75.0f * scale, 30.0f * scale));
+                ImGui::PopStyleColor();
+                ImGui::SameLine();
+                if (ImGui::Button("On##is_on", ImVec2(75.0f * scale, 30.0f * scale))) { integer_scaling = 1; active_preset = 3; }
+            }
+
+            // 6. Colours
+            ImGui::Text("Colours (Paleta de color):");
+            ImGui::SameLine(320.0f * scale);
+            if (color_mode) {
+                if (ImGui::Button("Raw (Original)##col_raw", ImVec2(130.0f * scale, 30.0f * scale))) { color_mode = 0; active_preset = 3; }
+                ImGui::SameLine();
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(1.0f, 0.45f, 0.0f, 0.95f));
+                ImGui::Button("As on a TV (Cálido)##col_tv", ImVec2(165.0f * scale, 30.0f * scale));
+                ImGui::PopStyleColor();
+            } else {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.28f, 0.42f, 0.95f));
+                ImGui::Button("Raw (Original)##col_raw", ImVec2(130.0f * scale, 30.0f * scale));
+                ImGui::PopStyleColor();
+                ImGui::SameLine();
+                if (ImGui::Button("As on a TV (Cálido)##col_tv", ImVec2(165.0f * scale, 30.0f * scale))) { color_mode = 1; active_preset = 3; }
+            }
+
+            // 7. Escala de ventana / Resolución interna
+            ImGui::Text("Internal Resolution / Scale:");
+            ImGui::SameLine(320.0f * scale);
+            const char *scales[] = { "1x (256x224)", "2x (720p)", "3x (1080p)", "4x (1440p 2K)", "5x (2160p 4K)" };
             int cur_scale_idx = window_scale - 1;
             if (cur_scale_idx < 0) cur_scale_idx = 0;
             if (cur_scale_idx > 4) cur_scale_idx = 4;
-            ImGui::PushItemWidth(380.0f * scale);
+            ImGui::PushItemWidth(200.0f * scale);
             if (ImGui::Combo("##win_scale", &cur_scale_idx, scales, 5)) {
                 window_scale = cur_scale_idx + 1;
                 active_preset = 3;
             }
             ImGui::PopItemWidth();
 
-            ImGui::Dummy(ImVec2(0, 12.0f * scale));
+            ImGui::Dummy(ImVec2(0, 8.0f * scale));
 
-            // Pantalla completa
-            ImGui::Text("Modo de visualización en el juego:");
-            if (ImGui::RadioButton("Modo Ventana", fullscreen == 0)) fullscreen = 0;
-            ImGui::SameLine(240.0f * scale);
-            if (ImGui::RadioButton("Pantalla Completa (Fullscreen)", fullscreen != 0)) fullscreen = 1;
+            // ── Bloque 2: MOTION ──
+            if (font_bold) ImGui::PushFont(font_bold);
+            ImGui::TextColored(ImVec4(1.0f, 0.50f, 0.05f, 1.0f), "Motion");
+            if (font_bold) ImGui::PopFont();
 
-            ImGui::Dummy(ImVec2(0, 12.0f * scale));
-
-            // Relación de aspecto
-            ImGui::Text("Relación de aspecto del juego:");
-            if (ImGui::RadioButton("16:9 Panorámico", widescreen == 1)) { widescreen = 1; active_preset = 3; }
-            ImGui::SameLine(240.0f * scale);
-            if (ImGui::RadioButton("4:3 Clásico Original", widescreen == 0)) { widescreen = 0; active_preset = 3; }
-
-            ImGui::Dummy(ImVec2(0, 12.0f * scale));
-
-            // Filtro bilineal
-            ImGui::Text("Filtro de textura gráfica:");
-            if (ImGui::RadioButton("Bilineal (Suave)", linear_filter == 1)) linear_filter = 1;
-            ImGui::SameLine(240.0f * scale);
-            if (ImGui::RadioButton("Píxel Nítido (Nearest)", linear_filter == 0)) linear_filter = 0;
-
-            ImGui::Dummy(ImVec2(0, 12.0f * scale));
-
-            // Frecuencia de Refresco del Monitor
-            ImGui::Text("Frecuencia de Refresco del Monitor / Pacing (FPS):");
-            int hz_options_pic[] = { 60, 144, 240, 360 };
-            const char *hz_names_pic[] = {
-                "60 Hz (Estándar NTSC)",
-                "144 Hz (Monitor Gaming 144Hz)",
-                "240 Hz (Monitor Gaming 240Hz)",
-                "360 Hz (Monitor Esports 360Hz)"
-            };
-            for (int h = 0; h < 4; h++) {
-                if (h == 1 || h == 3) ImGui::SameLine(260.0f * scale);
-                if (ImGui::RadioButton(hz_names_pic[h], refresh_rate == hz_options_pic[h])) {
-                    refresh_rate = hz_options_pic[h];
-                    active_preset = 3;
+            // Refresh Rate (Hz) con opción AUTO
+            ImGui::Text("Refresh Rate / High Frame Rate:");
+            ImGui::SameLine(320.0f * scale);
+            int hz_opts_pic[] = { 60, 144, 240, 360, 0 };
+            for (int h = 0; h < 5; h++) {
+                if (h > 0) ImGui::SameLine();
+                bool is_c = (refresh_rate == hz_opts_pic[h]);
+                char h_lbl[48];
+                if (hz_opts_pic[h] == 0) {
+                    snprintf(h_lbl, sizeof(h_lbl), "Auto (%d Hz)##hz_pic_auto", detected_hz);
+                } else {
+                    snprintf(h_lbl, sizeof(h_lbl), "%d Hz##hz_pic_%d", hz_opts_pic[h], hz_opts_pic[h]);
+                }
+                float b_w = (hz_opts_pic[h] == 0) ? 140.0f * scale : 75.0f * scale;
+                if (is_c) {
+                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(1.0f, 0.45f, 0.0f, 0.95f));
+                    ImGui::Button(h_lbl, ImVec2(b_w, 30.0f * scale));
+                    ImGui::PopStyleColor();
+                } else {
+                    if (ImGui::Button(h_lbl, ImVec2(b_w, 30.0f * scale))) {
+                        refresh_rate = hz_opts_pic[h];
+                        active_preset = 3;
+                    }
                 }
             }
-            ImGui::TextColored(ImVec4(0.55f, 0.63f, 0.74f, 1.0f), "Presenta fotogramas sincronizados a 144Hz, 240Hz o 360Hz para eliminar judder y minimizar la latencia del ratón.");
+            ImGui::TextColored(ImVec4(0.55f, 0.63f, 0.74f, 1.0f), "La opción Auto sincroniza fotogramas y ratón a la frecuencia nativa detectada de tu monitor (%d Hz).", detected_hz);
+
             if (font_regular) ImGui::PopFont();
         }
 
@@ -837,7 +961,11 @@ extern "C" int run_snatcher_modern_launcher(char *disc_path_io, size_t disc_path
         fprintf(fset, "window_scale = %d\n", window_scale);
         fprintf(fset, "widescreen = %d\n", widescreen);
         fprintf(fset, "view_mode = %d\n", widescreen ? 1 : 0);
-        fprintf(fset, "linear_filter = %d\n", linear_filter);
+        fprintf(fset, "vsync = %d\n", vsync);
+        fprintf(fset, "filter = %d\n", linear_filter);
+        fprintf(fset, "linear_filter = %d\n", (linear_filter == 1) ? 1 : 0);
+        fprintf(fset, "integer_scaling = %d\n", integer_scaling);
+        fprintf(fset, "color_mode = %d\n", color_mode);
         fprintf(fset, "volume = %d\n", volume);
         fprintf(fset, "mouse_enabled = %d\n", mouse_enabled);
         fprintf(fset, "refresh_rate = %d\n", refresh_rate);
@@ -857,6 +985,9 @@ extern "C" int run_snatcher_modern_launcher(char *disc_path_io, size_t disc_path
         cfg_out->volume = volume;
         cfg_out->mouse_enabled = mouse_enabled;
         cfg_out->refresh_rate = refresh_rate;
+        cfg_out->vsync = vsync;
+        cfg_out->integer_scaling = integer_scaling;
+        cfg_out->color_mode = color_mode;
     }
 
     return result_action;
