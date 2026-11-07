@@ -1,0 +1,28 @@
+# =============================================================================
+# Perfil de Configuracion de Renderizado y Audio — Snatcher PC Recomp
+# =============================================================================
+
+[video]
+fullscreen = false
+window_width = 1920
+window_height = 1080
+render_scale = 4.0
+aspect_ratio = "16:9"
+shader_preset = "crt_royale" # "none", "crt_royale", "scanlines", "sharp_bilinear"
+integer_scaling = true
+bilinear_filter = false
+
+[audio]
+master_volume = 100
+pcm_voices_volume = 100
+cdda_music_volume = 95
+fm_synth_volume = 90
+resampling_quality = "high"
+latency_ms = 20
+
+[input]
+device = "auto" # "auto", "gamepad", "keyboard"
+rumble = true
+mouse_capture = true
+show_crosshair = true
+crosshair_color = "0x00FF00"

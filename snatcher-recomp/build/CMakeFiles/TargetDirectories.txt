@@ -1,0 +1,3 @@
+G:/Proyectos/sega megadrive/snatcher-recomp/build/CMakeFiles/Snatcher_Recompiled.dir
+G:/Proyectos/sega megadrive/snatcher-recomp/build/CMakeFiles/ALL_BUILD.dir
+G:/Proyectos/sega megadrive/snatcher-recomp/build/CMakeFiles/ZERO_CHECK.dir

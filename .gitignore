@@ -1,0 +1,51 @@
+# Build directories and temporary artifacts
+/build/
+/build-*/
+/build-release/
+/build-tools/
+bin/
+obj/
+*.obj
+*.exe
+*.pdb
+*.ilk
+*.exp
+*.idb
+*.tlog
+*.log
+*.tmp
+frame_*.bmp
+frame_*.png
+
+# Visual Studio files
+.vs/
+*.vcxproj*
+*.sln
+*.suo
+*.user
+
+# Sega CD disc images, ROMs, BIOS and archives (Users supply their own)
+*.bin
+*.BIN
+*.iso
+*.ISO
+*.cue
+*.CUE
+*.sgcd
+*.7z
+*.zip
+*.rar
+!segagenesisrecomp/runner/external/SDL2/SDL2-VC.zip
+
+# Saves and BIOS (copyrighted proprietary binaries)
+/bios/
+/saves/
+snatcher-recomp/bios/
+snatcher-recomp/saves/
+snatcher-recomp/disc/
+snatcher-recomp/extracted/
+
+# Local logs and temporary scripts
+snatcher_debug.log
+snatcher_log.txt
+update_segacd.py

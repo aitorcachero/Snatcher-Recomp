@@ -1,0 +1,47 @@
+# =============================================================================
+# SNATCHER (Mega-CD) — Recompilacion Estatica Nativa para PC (Windows x64)
+# =============================================================================
+
+[game]
+title = "Snatcher"
+developer = "Konami / Kojima Productions"
+platform = "Sega Mega-CD / Sega CD"
+serial = "GM T-95035 -00"
+region = "NTSC-U"
+language = "Español"
+version = "1.0.0"
+
+[engine]
+dual_cpu = true
+main_cpu = "Motorola 68000 @ 7.67 MHz (Recompilado Nativo C x64)"
+sub_cpu  = "Motorola 68000 @ 12.50 MHz (Recompilado Nativo C x64)"
+z80_audio = "Zilog Z80 (Driver YM2612 + SN76489)"
+rf5c164_pcm = true
+cd_audio = true
+
+[media]
+disc_image = "disc/snatcher.sgcd"
+disc_cue   = "disc/SNATCHER.CUE"
+disc_bin   = "disc/SNATCHER.BIN"
+bram_save  = "saves/snatcher.bram"
+
+[display]
+internal_resolution = "4K"
+native_aspect = "4:3"
+widescreen_mode = "16:9"
+widescreen_style = "expanded_canvas" # expanded_canvas | centered_frame
+vsync = true
+refresh_rate = 144
+target_fps = 60
+
+[controls]
+# Konami Justifier Lightgun mapeada al Raton del PC
+enable_mouse_justifier = true
+mouse_sensitivity = 1.0
+mouse_left_click = "TRIGGER_FIRE"
+mouse_right_click = "ACTION_RELOAD"
+mouse_middle_click = "BUTTON_START"
+
+# Gamepad / Mando
+gamepad_enabled = true
+dpad_aiming = true
