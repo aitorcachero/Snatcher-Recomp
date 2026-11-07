@@ -23,6 +23,7 @@ typedef struct {
     int linear_filter;
     int volume;
     int mouse_enabled;
+    int refresh_rate;
 } SnatcherLauncherConfig;
 
 static bool prompt_browse_disc(char *out_path, size_t max_len) {
@@ -71,6 +72,7 @@ extern "C" int run_snatcher_modern_launcher(char *disc_path_io, size_t disc_path
     int linear_filter = 1;
     int volume = 100;
     int mouse_enabled = 1;
+    int refresh_rate = 60;
 
     FILE *fset = fopen("settings.toml", "r");
     if (fset) {
@@ -83,6 +85,7 @@ extern "C" int run_snatcher_modern_launcher(char *disc_path_io, size_t disc_path
             else if (sscanf(line, "linear_filter = %d", &v) == 1) linear_filter = v;
             else if (sscanf(line, "volume = %d", &v) == 1) volume = v;
             else if (sscanf(line, "mouse_enabled = %d", &v) == 1) mouse_enabled = v;
+            else if (sscanf(line, "refresh_rate = %d", &v) == 1) refresh_rate = v;
         }
         fclose(fset);
     }
@@ -352,7 +355,7 @@ extern "C" int run_snatcher_modern_launcher(char *disc_path_io, size_t disc_path
         if (font_bold) ImGui::PopFont();
 
         if (font_regular) ImGui::PushFont(font_regular);
-        draw->AddText(ImVec2(28.0f * scale, win_h - 50.0f * scale), IM_COL32(148, 163, 184, 230), "PC Native Recompilation v1.0.1");
+        draw->AddText(ImVec2(28.0f * scale, win_h - 50.0f * scale), IM_COL32(148, 163, 184, 230), "PC Native Recompilation v1.0.1 • 60/144/240/360 Hz");
         if (font_regular) ImGui::PopFont();
 
         ImGui::EndChild();
@@ -470,10 +473,10 @@ extern "C" int run_snatcher_modern_launcher(char *disc_path_io, size_t disc_path
                 const char *sub1;
                 const char *sub2;
             } cards[4] = {
-                { "Recomendado", "Moderna", "1920x1080 (16:9)", "Hack Panorámico, Suave" },
-                { NULL, "Steam Deck", "1280x800 (16:9)", "Portátil, Optimizado" },
-                { NULL, "Original 1994", "1280x960 (4:3)", "Píxel Nítido / Retro" },
-                { NULL, "Personalizado", "Ajustable", "Configura en Picture" }
+                { "Recomendado", "Moderna", "1920x1080 (16:9)", "144 Hz, Panorámico, Suave" },
+                { NULL, "Steam Deck", "1280x800 (16:9)", "60 Hz, Portátil, Eficiente" },
+                { NULL, "Original 1994", "1280x960 (4:3)", "60 Hz, Píxel Nítido / Retro" },
+                { NULL, "Personalizado", "Ajustable", "Configura en Picture o Play" }
             };
 
             float card_w = 210.0f * scale;
@@ -515,11 +518,11 @@ extern "C" int run_snatcher_modern_launcher(char *disc_path_io, size_t disc_path
                 if (ImGui::InvisibleButton("##card_btn", ImVec2(card_w, card_h))) {
                     active_preset = i;
                     if (i == 0) { // Modern
-                        fullscreen = 1; window_scale = 3; widescreen = 1; linear_filter = 1;
+                        fullscreen = 1; window_scale = 3; widescreen = 1; linear_filter = 1; refresh_rate = 144;
                     } else if (i == 1) { // Steam Deck
-                        fullscreen = 1; window_scale = 2; widescreen = 1; linear_filter = 1;
+                        fullscreen = 1; window_scale = 2; widescreen = 1; linear_filter = 1; refresh_rate = 60;
                     } else if (i == 2) { // Original 1994
-                        fullscreen = 0; window_scale = 3; widescreen = 0; linear_filter = 0;
+                        fullscreen = 0; window_scale = 3; widescreen = 0; linear_filter = 0; refresh_rate = 60;
                     }
                 }
                 ImGui::PopID();
@@ -570,6 +573,30 @@ extern "C" int run_snatcher_modern_launcher(char *disc_path_io, size_t disc_path
                 ImGui::PopStyleColor();
             }
             ImGui::TextColored(ImVec4(0.55f, 0.63f, 0.74f, 1.0f), "Apunta y dispara con el ratón de tu PC durante las secuencias de tiroteo de Snatcher.");
+
+            ImGui::Dummy(ImVec2(0, 6.0f * scale));
+
+            // Frecuencia de Refresco / Tasa de Hz (60, 144, 240, 360)
+            ImGui::TextColored(ImVec4(0.75f, 0.80f, 0.90f, 1.0f), "Tasa de Refresco (Hz):");
+            ImGui::SameLine(280.0f * scale);
+            int hz_options[] = { 60, 144, 240, 360 };
+            for (int h = 0; h < 4; h++) {
+                if (h > 0) ImGui::SameLine(0, 10.0f * scale);
+                bool is_cur = (refresh_rate == hz_options[h]);
+                char hlabel[32];
+                snprintf(hlabel, sizeof(hlabel), "%d Hz##hz_play_%d", hz_options[h], hz_options[h]);
+                if (is_cur) {
+                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(1.0f, 0.45f, 0.0f, 0.95f));
+                    ImGui::Button(hlabel, ImVec2(80.0f * scale, 36.0f * scale));
+                    ImGui::PopStyleColor();
+                } else {
+                    if (ImGui::Button(hlabel, ImVec2(80.0f * scale, 36.0f * scale))) {
+                        refresh_rate = hz_options[h];
+                        active_preset = 3;
+                    }
+                }
+            }
+            ImGui::TextColored(ImVec4(0.55f, 0.63f, 0.74f, 1.0f), "Sincronización nativa de pantalla y ratón: 60Hz estándar, 144Hz / 240Hz gaming o 360Hz esports.");
             if (font_regular) ImGui::PopFont();
         }
 
@@ -617,6 +644,26 @@ extern "C" int run_snatcher_modern_launcher(char *disc_path_io, size_t disc_path
             if (ImGui::RadioButton("Bilineal (Suave)", linear_filter == 1)) linear_filter = 1;
             ImGui::SameLine(240.0f * scale);
             if (ImGui::RadioButton("Píxel Nítido (Nearest)", linear_filter == 0)) linear_filter = 0;
+
+            ImGui::Dummy(ImVec2(0, 12.0f * scale));
+
+            // Frecuencia de Refresco del Monitor
+            ImGui::Text("Frecuencia de Refresco del Monitor / Pacing (FPS):");
+            int hz_options_pic[] = { 60, 144, 240, 360 };
+            const char *hz_names_pic[] = {
+                "60 Hz (Estándar NTSC)",
+                "144 Hz (Monitor Gaming 144Hz)",
+                "240 Hz (Monitor Gaming 240Hz)",
+                "360 Hz (Monitor Esports 360Hz)"
+            };
+            for (int h = 0; h < 4; h++) {
+                if (h == 1 || h == 3) ImGui::SameLine(260.0f * scale);
+                if (ImGui::RadioButton(hz_names_pic[h], refresh_rate == hz_options_pic[h])) {
+                    refresh_rate = hz_options_pic[h];
+                    active_preset = 3;
+                }
+            }
+            ImGui::TextColored(ImVec4(0.55f, 0.63f, 0.74f, 1.0f), "Presenta fotogramas sincronizados a 144Hz, 240Hz o 360Hz para eliminar judder y minimizar la latencia del ratón.");
             if (font_regular) ImGui::PopFont();
         }
 
@@ -770,6 +817,7 @@ extern "C" int run_snatcher_modern_launcher(char *disc_path_io, size_t disc_path
         fprintf(fset, "linear_filter = %d\n", linear_filter);
         fprintf(fset, "volume = %d\n", volume);
         fprintf(fset, "mouse_enabled = %d\n", mouse_enabled);
+        fprintf(fset, "refresh_rate = %d\n", refresh_rate);
         fclose(fset);
     }
 
@@ -785,6 +833,7 @@ extern "C" int run_snatcher_modern_launcher(char *disc_path_io, size_t disc_path
         cfg_out->linear_filter = linear_filter;
         cfg_out->volume = volume;
         cfg_out->mouse_enabled = mouse_enabled;
+        cfg_out->refresh_rate = refresh_rate;
     }
 
     return result_action;

@@ -37,6 +37,7 @@ typedef struct {
     int linear_filter;
     int volume;
     int mouse_enabled;
+    int refresh_rate;
 } SnatcherLauncherConfig;
 
 // Lanzador moderno estilo Revo
@@ -529,12 +530,13 @@ int main(int argc, char **argv) {
 
     // 2b. Launcher moderno con configuracion de resolución, controles, audio y mejoras
     SnatcherLauncherConfig launcher_cfg = {
-        .fullscreen = 0,
+        .fullscreen = 1,
         .window_scale = 3,
         .widescreen = 1,
         .linear_filter = 1,
         .volume = 100,
-        .mouse_enabled = 1
+        .mouse_enabled = 1,
+        .refresh_rate = 60
     };
 
     if (!no_launcher && max_frames == 0) {
@@ -703,7 +705,18 @@ int main(int argc, char **argv) {
     }
     log_debug("SDL window created OK.");
 
-    SDL_Renderer *renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+    int target_hz = launcher_cfg.refresh_rate;
+    if (target_hz != 60 && target_hz != 144 && target_hz != 240 && target_hz != 360) {
+        target_hz = 60;
+    }
+    snprintf(buf, sizeof(buf), "Selected display refresh rate: %d Hz", target_hz);
+    log_debug(buf);
+
+    Uint32 rend_flags = SDL_RENDERER_ACCELERATED;
+    if (target_hz == 60) {
+        rend_flags |= SDL_RENDERER_PRESENTVSYNC;
+    }
+    SDL_Renderer *renderer = SDL_CreateRenderer(window, -1, rend_flags);
     if (!renderer) {
         log_debug("Accelerated renderer failed, falling back to software...");
         renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_SOFTWARE);
@@ -753,10 +766,15 @@ int main(int argc, char **argv) {
 
     snatcher_justifier_set_resolution(win_w, win_h);
 
-    // 8. Bucle principal de juego
+    // 8. Bucle principal de juego con soporte nativo para 60 Hz, 144 Hz, 240 Hz y 360 Hz
     int quit = 0;
     uint64_t freq = SDL_GetPerformanceFrequency();
-    uint64_t target = SDL_GetPerformanceCounter();
+    uint64_t last_time = SDL_GetPerformanceCounter();
+    uint64_t target_render_time = last_time;
+    uint64_t render_interval = freq / (uint64_t)target_hz;
+
+    const double time_per_sim_frame = 1.0 / 60.0;
+    double accumulator = 0.0;
 
     while (!quit) {
         SDL_Event event;
@@ -807,126 +825,141 @@ int main(int argc, char **argv) {
         int menu_open = presentation && segacd_presentation_is_open(presentation);
         audio_set_playback_enabled(!menu_open);
 
+        // Control de tiempo para la simulación precisa de Mega-CD a 60 Hz
+        uint64_t current_time = SDL_GetPerformanceCounter();
+        double delta_seconds = (double)(current_time - last_time) / (double)freq;
+        last_time = current_time;
+        if (delta_seconds > 0.15) delta_seconds = 0.15;
+        accumulator += delta_seconds;
+
         if (!menu_open) {
-            // Lectura de mandos
-            int block_input = segacd_presentation_blocks_game_input(presentation);
-            uint16_t buttons = block_input ? 0 : (keyboard_pad() | controller_pad(pad));
-            segacd_machine_pad(&machine, 0, buttons);
+            // Avanzar fotogramas de la simulación nativa a 60.0 Hz exactos
+            while (accumulator >= time_per_sim_frame) {
+                int block_input = segacd_presentation_blocks_game_input(presentation);
+                uint16_t buttons = block_input ? 0 : (keyboard_pad() | controller_pad(pad));
+                segacd_machine_pad(&machine, 0, buttons);
 
-            // Ejecutar un fotograma nativo de Mega-CD
-            M68kStepResult res = segacd_machine_run_frame(&machine);
-            if (max_frames > 0 && machine.frames >= (uint64_t)max_frames) {
-                quit = 1;
-            }
+                // Ejecutar un fotograma nativo de Mega-CD
+                M68kStepResult res = segacd_machine_run_frame(&machine);
+                if (max_frames > 0 && machine.frames >= (uint64_t)max_frames) {
+                    quit = 1;
+                    break;
+                }
 
-            // Enviar buffer de audio nativo hacia SDL2
-            if (audio) {
-                segacd_native_audio_finish_frame(audio, machine.frames * 896040u, (uint32_t)machine.frames, 1);
-            }
-        static uint64_t last_logged_frame = 0;
-        static int error_logged = 0;
-        if (res != M68K_STEP_OK && !error_logged) {
-            char msg[2048];
-            uint32_t mpc = machine.coordinator.cpu[0].state.regs.PC;
-            uint32_t spc = machine.coordinator.cpu[1].state.regs.PC;
-            uint8_t mbytes[16] = {0};
-            if (mpc >= 0xFF0000u) {
-                for (int b = 0; b < 16; b++) mbytes[b] = g_ram[(mpc + b) & 0xFFFFu];
-            } else if (mpc < sizeof(machine.devices.bios)) {
-                for (int b = 0; b < 16; b++) mbytes[b] = machine.devices.bios[(mpc + b) & 0x1FFFFu];
-            }
-            uint8_t sbytes[16] = {0};
-            for (int b = 0; b < 16; b++) sbytes[b] = machine.devices.prg[(spc + b) & 0x7FFFFu];
+                // Enviar buffer de audio nativo hacia SDL2
+                if (audio) {
+                    segacd_native_audio_finish_frame(audio, machine.frames * 896040u, (uint32_t)machine.frames, 1);
+                }
 
-            snprintf(msg, sizeof(msg),
-                     "FRAME ERROR at frame %llu: res=%d, last_cpu=%u, last_res=%d, "
-                     "MainPC=0x%06X, SubPC=0x%06X, Z80_pc=0x%04X, Z80_res=%d, CDD_status=%d\n"
-                     "   Scheduler: waits=%llu, wait_addr=0x%06X, wait_cpu=%u, wait_res=%d\n"
-                     "   Main regs: D0=%08X D1=%08X D2=%08X A0=%08X A1=%08X A7=%08X SR=%04X fault=%d faddr=0x%06X\n"
-                     "   Sub  regs: D0=%08X D1=%08X D2=%08X A0=%08X A1=%08X A7=%08X SR=%04X fault=%d faddr=0x%06X\n"
-                     "   GateArray: mode=0x%02X, flg=[%02X,%02X], cmd0=%04X, stat0=%04X, irq_p=%02X, irq_m=%02X\n"
-                     "   Main code at MainPC: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X\n"
-                     "   Sub  code at SubPC:  %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
-                     (unsigned long long)machine.frames, res,
-                     machine.coordinator.last_cpu, machine.coordinator.last_result,
-                     mpc, spc, machine.z80.state.pc, machine.z80.result, machine.devices.drive.status,
-                     (unsigned long long)machine.coordinator.waits,
-                     machine.coordinator.wait_address,
-                     machine.coordinator.wait_cpu,
-                     machine.coordinator.wait_result,
-                     machine.coordinator.cpu[0].state.regs.D[0],
-                     machine.coordinator.cpu[0].state.regs.D[1],
-                     machine.coordinator.cpu[0].state.regs.D[2],
-                     machine.coordinator.cpu[0].state.regs.A[0],
-                     machine.coordinator.cpu[0].state.regs.A[1],
-                     machine.coordinator.cpu[0].state.regs.A[7],
-                     machine.coordinator.cpu[0].state.regs.SR,
-                     machine.coordinator.cpu[0].state.fault,
-                     machine.coordinator.cpu[0].state.fault_address,
-                     machine.coordinator.cpu[1].state.regs.D[0],
-                     machine.coordinator.cpu[1].state.regs.D[1],
-                     machine.coordinator.cpu[1].state.regs.D[2],
-                     machine.coordinator.cpu[1].state.regs.A[0],
-                     machine.coordinator.cpu[1].state.regs.A[1],
-                     machine.coordinator.cpu[1].state.regs.A[7],
-                     machine.coordinator.cpu[1].state.regs.SR,
-                     machine.coordinator.cpu[1].state.fault,
-                     machine.coordinator.cpu[1].state.fault_address,
-                     machine.devices.memory_mode,
-                     machine.devices.flags[0], machine.devices.flags[1],
-                     machine.devices.command[0], machine.devices.status[0],
-                     machine.devices.irq_pending, machine.devices.irq_mask,
-                     mbytes[0], mbytes[1], mbytes[2], mbytes[3], mbytes[4], mbytes[5],
-                     mbytes[6], mbytes[7], mbytes[8], mbytes[9], mbytes[10], mbytes[11],
-                     sbytes[0], sbytes[1], sbytes[2], sbytes[3], sbytes[4], sbytes[5],
-                     sbytes[6], sbytes[7], sbytes[8], sbytes[9], sbytes[10], sbytes[11]);
-            log_debug(msg);
-            error_logged = 1;
-        } else if (machine.frames - last_logged_frame >= 60) {
-            char msg[512];
-            snprintf(msg, sizeof(msg),
-                     "Frame %llu: MainPC=0x%06X, SubPC=0x%06X, SubRun=%d, CDD=%d, mode=0x%02X, flg=[%02X,%02X], cmd0=%04X, stat0=%04X, irq_p=%02X, irq_m=%02X\n"
-                     "   Main regs: D0=%08X D1=%08X A0=%08X A1=%08X A7=%08X SR=%04X\n"
-                     "   Sub  regs: D0=%08X D1=%08X A0=%08X A1=%08X A7=%08X SR=%04X\n"
-                     "   Sub at SubPC: %02X %02X %02X %02X %02X %02X %02X %02X",
-                     (unsigned long long)machine.frames,
-                     machine.coordinator.cpu[0].state.regs.PC,
-                     machine.coordinator.cpu[1].state.regs.PC,
-                     segacd_sub_runnable(&machine.devices),
-                     machine.devices.drive.status,
-                     machine.devices.memory_mode,
-                     machine.devices.flags[0],
-                     machine.devices.flags[1],
-                     machine.devices.command[0],
-                     machine.devices.status[0],
-                     machine.devices.irq_pending,
-                     machine.devices.irq_mask,
-                     machine.coordinator.cpu[0].state.regs.D[0],
-                     machine.coordinator.cpu[0].state.regs.D[1],
-                     machine.coordinator.cpu[0].state.regs.A[0],
-                     machine.coordinator.cpu[0].state.regs.A[1],
-                     machine.coordinator.cpu[0].state.regs.A[7],
-                     machine.coordinator.cpu[0].state.regs.SR,
-                     machine.coordinator.cpu[1].state.regs.D[0],
-                     machine.coordinator.cpu[1].state.regs.D[1],
-                     machine.coordinator.cpu[1].state.regs.A[0],
-                     machine.coordinator.cpu[1].state.regs.A[1],
-                     machine.coordinator.cpu[1].state.regs.A[7],
-                     machine.coordinator.cpu[1].state.regs.SR,
-                     machine.devices.prg[machine.coordinator.cpu[1].state.regs.PC & 0x7FFFF],
-                     machine.devices.prg[(machine.coordinator.cpu[1].state.regs.PC + 1) & 0x7FFFF],
-                     machine.devices.prg[(machine.coordinator.cpu[1].state.regs.PC + 2) & 0x7FFFF],
-                     machine.devices.prg[(machine.coordinator.cpu[1].state.regs.PC + 3) & 0x7FFFF],
-                     machine.devices.prg[(machine.coordinator.cpu[1].state.regs.PC + 4) & 0x7FFFF],
-                     machine.devices.prg[(machine.coordinator.cpu[1].state.regs.PC + 5) & 0x7FFFF],
-                     machine.devices.prg[(machine.coordinator.cpu[1].state.regs.PC + 6) & 0x7FFFF],
-                     machine.devices.prg[(machine.coordinator.cpu[1].state.regs.PC + 7) & 0x7FFFF]);
-            log_debug(msg);
-            last_logged_frame = machine.frames;
+                accumulator -= time_per_sim_frame;
+
+                static uint64_t last_logged_frame = 0;
+                static int error_logged = 0;
+                if (res != M68K_STEP_OK && !error_logged) {
+                    char msg[2048];
+                    uint32_t mpc = machine.coordinator.cpu[0].state.regs.PC;
+                    uint32_t spc = machine.coordinator.cpu[1].state.regs.PC;
+                    uint8_t mbytes[16] = {0};
+                    if (mpc >= 0xFF0000u) {
+                        for (int b = 0; b < 16; b++) mbytes[b] = g_ram[(mpc + b) & 0xFFFFu];
+                    } else if (mpc < sizeof(machine.devices.bios)) {
+                        for (int b = 0; b < 16; b++) mbytes[b] = machine.devices.bios[(mpc + b) & 0x1FFFFu];
+                    }
+                    uint8_t sbytes[16] = {0};
+                    for (int b = 0; b < 16; b++) sbytes[b] = machine.devices.prg[(spc + b) & 0x7FFFFu];
+
+                    snprintf(msg, sizeof(msg),
+                             "FRAME ERROR at frame %llu: res=%d, last_cpu=%u, last_res=%d, "
+                             "MainPC=0x%06X, SubPC=0x%06X, Z80_pc=0x%04X, Z80_res=%d, CDD_status=%d\n"
+                             "   Scheduler: waits=%llu, wait_addr=0x%06X, wait_cpu=%u, wait_res=%d\n"
+                             "   Main regs: D0=%08X D1=%08X D2=%08X A0=%08X A1=%08X A7=%08X SR=%04X fault=%d faddr=0x%06X\n"
+                             "   Sub  regs: D0=%08X D1=%08X D2=%08X A0=%08X A1=%08X A7=%08X SR=%04X fault=%d faddr=0x%06X\n"
+                             "   GateArray: mode=0x%02X, flg=[%02X,%02X], cmd0=%04X, stat0=%04X, irq_p=%02X, irq_m=%02X\n"
+                             "   Main code at MainPC: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X\n"
+                             "   Sub  code at SubPC:  %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
+                             (unsigned long long)machine.frames, res,
+                             machine.coordinator.last_cpu, machine.coordinator.last_result,
+                             mpc, spc, machine.z80.state.pc, machine.z80.result, machine.devices.drive.status,
+                             (unsigned long long)machine.coordinator.waits,
+                             machine.coordinator.wait_address,
+                             machine.coordinator.wait_cpu,
+                             machine.coordinator.wait_result,
+                             machine.coordinator.cpu[0].state.regs.D[0],
+                             machine.coordinator.cpu[0].state.regs.D[1],
+                             machine.coordinator.cpu[0].state.regs.D[2],
+                             machine.coordinator.cpu[0].state.regs.A[0],
+                             machine.coordinator.cpu[0].state.regs.A[1],
+                             machine.coordinator.cpu[0].state.regs.A[7],
+                             machine.coordinator.cpu[0].state.regs.SR,
+                             machine.coordinator.cpu[0].state.fault,
+                             machine.coordinator.cpu[0].state.fault_address,
+                             machine.coordinator.cpu[1].state.regs.D[0],
+                             machine.coordinator.cpu[1].state.regs.D[1],
+                             machine.coordinator.cpu[1].state.regs.D[2],
+                             machine.coordinator.cpu[1].state.regs.A[0],
+                             machine.coordinator.cpu[1].state.regs.A[1],
+                             machine.coordinator.cpu[1].state.regs.A[7],
+                             machine.coordinator.cpu[1].state.regs.SR,
+                             machine.coordinator.cpu[1].state.fault,
+                             machine.coordinator.cpu[1].state.fault_address,
+                             machine.devices.memory_mode,
+                             machine.devices.flags[0], machine.devices.flags[1],
+                             machine.devices.command[0], machine.devices.status[0],
+                             machine.devices.irq_pending, machine.devices.irq_mask,
+                             mbytes[0], mbytes[1], mbytes[2], mbytes[3], mbytes[4], mbytes[5],
+                             mbytes[6], mbytes[7], mbytes[8], mbytes[9], mbytes[10], mbytes[11],
+                             sbytes[0], sbytes[1], sbytes[2], sbytes[3], sbytes[4], sbytes[5],
+                             sbytes[6], sbytes[7], sbytes[8], sbytes[9], sbytes[10], sbytes[11]);
+                    log_debug(msg);
+                    error_logged = 1;
+                } else if (machine.frames - last_logged_frame >= 60) {
+                    char msg[512];
+                    snprintf(msg, sizeof(msg),
+                             "Frame %llu: MainPC=0x%06X, SubPC=0x%06X, SubRun=%d, CDD=%d, mode=0x%02X, flg=[%02X,%02X], cmd0=%04X, stat0=%04X, irq_p=%02X, irq_m=%02X\n"
+                             "   Main regs: D0=%08X D1=%08X A0=%08X A1=%08X A7=%08X SR=%04X\n"
+                             "   Sub  regs: D0=%08X D1=%08X A0=%08X A1=%08X A7=%08X SR=%04X\n"
+                             "   Sub at SubPC: %02X %02X %02X %02X %02X %02X %02X %02X",
+                             (unsigned long long)machine.frames,
+                             machine.coordinator.cpu[0].state.regs.PC,
+                             machine.coordinator.cpu[1].state.regs.PC,
+                             segacd_sub_runnable(&machine.devices),
+                             machine.devices.drive.status,
+                             machine.devices.memory_mode,
+                             machine.devices.flags[0],
+                             machine.devices.flags[1],
+                             machine.devices.command[0],
+                             machine.devices.status[0],
+                             machine.devices.irq_pending,
+                             machine.devices.irq_mask,
+                             machine.coordinator.cpu[0].state.regs.D[0],
+                             machine.coordinator.cpu[0].state.regs.D[1],
+                             machine.coordinator.cpu[0].state.regs.A[0],
+                             machine.coordinator.cpu[0].state.regs.A[1],
+                             machine.coordinator.cpu[0].state.regs.A[7],
+                             machine.coordinator.cpu[0].state.regs.SR,
+                             machine.coordinator.cpu[1].state.regs.D[0],
+                             machine.coordinator.cpu[1].state.regs.D[1],
+                             machine.coordinator.cpu[1].state.regs.A[0],
+                             machine.coordinator.cpu[1].state.regs.A[1],
+                             machine.coordinator.cpu[1].state.regs.A[7],
+                             machine.coordinator.cpu[1].state.regs.SR,
+                             machine.devices.prg[machine.coordinator.cpu[1].state.regs.PC & 0x7FFFF],
+                             machine.devices.prg[(machine.coordinator.cpu[1].state.regs.PC + 1) & 0x7FFFF],
+                             machine.devices.prg[(machine.coordinator.cpu[1].state.regs.PC + 2) & 0x7FFFF],
+                             machine.devices.prg[(machine.coordinator.cpu[1].state.regs.PC + 3) & 0x7FFFF],
+                             machine.devices.prg[(machine.coordinator.cpu[1].state.regs.PC + 4) & 0x7FFFF],
+                             machine.devices.prg[(machine.coordinator.cpu[1].state.regs.PC + 5) & 0x7FFFF],
+                             machine.devices.prg[(machine.coordinator.cpu[1].state.regs.PC + 6) & 0x7FFFF],
+                             machine.devices.prg[(machine.coordinator.cpu[1].state.regs.PC + 7) & 0x7FFFF]);
+                    log_debug(msg);
+                    last_logged_frame = machine.frames;
+                }
+            }
+        } else {
+            accumulator = 0.0;
         }
-    }
 
-        // Renderizado del fotograma
+        // Renderizado del fotograma actual a la frecuencia nativa seleccionada (60 / 144 / 240 / 360 Hz)
         if (presentation) {
             unsigned game_w = machine.width ? machine.width : 256;
             unsigned game_h = machine.height ? machine.height : 224;
@@ -940,13 +973,20 @@ int main(int argc, char **argv) {
             }
         }
 
-        // Sincronizacion de refresco (60 Hz NTSC)
-        target += freq / 60;
+        // Sincronizacion de refresco para la tasa de Hz objetivo (60 / 144 / 240 / 360 Hz)
+        target_render_time += render_interval;
         uint64_t now = SDL_GetPerformanceCounter();
-        if (now < target) {
-            SDL_Delay((Uint32)((target - now) * 1000 / freq));
+        if (now < target_render_time) {
+            uint64_t diff = target_render_time - now;
+            Uint32 ms_to_sleep = (Uint32)(diff * 1000 / freq);
+            if (ms_to_sleep > 1) {
+                SDL_Delay(ms_to_sleep - 1);
+            }
+            while (SDL_GetPerformanceCounter() < target_render_time) {
+                YieldProcessor();
+            }
         } else {
-            target = now;
+            target_render_time = now;
         }
     }
 
