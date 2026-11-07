@@ -11,6 +11,8 @@
 #include "../../segagenesisrecomp/runner/cd/m68k_floor.h"
 #include "../../segagenesisrecomp/runner/audio.h"
 #include "snatcher_cue.h"
+#include "recomp_launcher.h"
+#include "../../segagenesisrecomp/runner/external/recomp-ui/src/common/keybinds.h"
 #include <SDL2/SDL.h>
 #include <windows.h>
 #include <commdlg.h>
@@ -92,15 +94,28 @@ static int media_read(void *image, int32_t lba, uint8_t raw[2352]) {
 
 static uint16_t keyboard_pad(void) {
     const Uint8 *k = SDL_GetKeyboardState(NULL);
+    const KeyBinds *kb = recompui_keybinds_get();
     uint16_t mask = 0;
-    if (k[SDL_SCANCODE_UP])     mask |= GPAD_UP;
-    if (k[SDL_SCANCODE_DOWN])   mask |= GPAD_DOWN;
-    if (k[SDL_SCANCODE_LEFT])   mask |= GPAD_LEFT;
-    if (k[SDL_SCANCODE_RIGHT])  mask |= GPAD_RIGHT;
-    if (k[SDL_SCANCODE_Z] || k[SDL_SCANCODE_SPACE]) mask |= GPAD_A;
-    if (k[SDL_SCANCODE_X])      mask |= GPAD_B;
-    if (k[SDL_SCANCODE_C])      mask |= GPAD_C;
-    if (k[SDL_SCANCODE_RETURN]) mask |= GPAD_START;
+    if (kb) {
+        if (kb->p1.up    != SDL_SCANCODE_UNKNOWN && k[kb->p1.up])    mask |= GPAD_UP;
+        if (kb->p1.down  != SDL_SCANCODE_UNKNOWN && k[kb->p1.down])  mask |= GPAD_DOWN;
+        if (kb->p1.left  != SDL_SCANCODE_UNKNOWN && k[kb->p1.left])  mask |= GPAD_LEFT;
+        if (kb->p1.right != SDL_SCANCODE_UNKNOWN && k[kb->p1.right]) mask |= GPAD_RIGHT;
+        if (kb->p1.a     != SDL_SCANCODE_UNKNOWN && k[kb->p1.a])     mask |= GPAD_A;
+        if (kb->p1.b     != SDL_SCANCODE_UNKNOWN && k[kb->p1.b])     mask |= GPAD_B;
+        if (kb->p1.x     != SDL_SCANCODE_UNKNOWN && k[kb->p1.x])     mask |= GPAD_C;
+        if (kb->p1.y     != SDL_SCANCODE_UNKNOWN && k[kb->p1.y])     mask |= GPAD_A;
+        if (kb->p1.start != SDL_SCANCODE_UNKNOWN && k[kb->p1.start]) mask |= GPAD_START;
+    }
+    // Sane fallback defaults: Arrows, WASD, Z/X/C/Space/Enter
+    if (k[SDL_SCANCODE_UP] || k[SDL_SCANCODE_W])     mask |= GPAD_UP;
+    if (k[SDL_SCANCODE_DOWN] || k[SDL_SCANCODE_S])   mask |= GPAD_DOWN;
+    if (k[SDL_SCANCODE_LEFT] || k[SDL_SCANCODE_A])   mask |= GPAD_LEFT;
+    if (k[SDL_SCANCODE_RIGHT] || k[SDL_SCANCODE_D])  mask |= GPAD_RIGHT;
+    if (k[SDL_SCANCODE_Z] || k[SDL_SCANCODE_J] || k[SDL_SCANCODE_SPACE]) mask |= GPAD_A;
+    if (k[SDL_SCANCODE_X] || k[SDL_SCANCODE_K])      mask |= GPAD_B;
+    if (k[SDL_SCANCODE_C] || k[SDL_SCANCODE_L])      mask |= GPAD_C;
+    if (k[SDL_SCANCODE_RETURN])                      mask |= GPAD_START;
     return mask;
 }
 
@@ -117,6 +132,12 @@ static uint16_t controller_pad(SDL_GameController *pad) {
     BUTTON(SDL_CONTROLLER_BUTTON_B, GPAD_C);
     BUTTON(SDL_CONTROLLER_BUTTON_START, GPAD_START);
 #undef BUTTON
+    Sint16 x = SDL_GameControllerGetAxis(pad, SDL_CONTROLLER_AXIS_LEFTX);
+    Sint16 y = SDL_GameControllerGetAxis(pad, SDL_CONTROLLER_AXIS_LEFTY);
+    if (x < -16000) mask |= GPAD_LEFT;
+    if (x > 16000) mask |= GPAD_RIGHT;
+    if (y < -16000) mask |= GPAD_UP;
+    if (y > 16000) mask |= GPAD_DOWN;
     return mask;
 }
 
@@ -211,13 +232,121 @@ static int prepare_disc_image(const char *input_path, char *out_disc_path, size_
     return 0;
 }
 
+typedef struct {
+    int fullscreen;
+    int window_scale;
+    int widescreen;
+    int linear_filter;
+    int volume;
+    int mouse_enabled;
+} SnatcherLauncherConfig;
+
+static int run_snatcher_launcher(char *disc_path_io, size_t disc_path_cap, SnatcherLauncherConfig *cfg_out) {
+    RecompLauncherCSettings ls;
+    memset(&ls, 0, sizeof(ls));
+    ls.output_method    = 0;   // SDL
+    ls.window_scale     = 3;   // 3x scale (1280x720 en 16:9)
+    ls.fullscreen       = 0;
+    ls.linear_filter    = 1;
+    ls.widescreen       = 1;   // 16:9 por defecto
+    ls.widescreen_cells = 426;
+    ls.enable_audio     = 1;
+    ls.audio_freq       = 48000;
+    ls.volume           = 100;
+    ls.mouse_enabled    = 1;
+    ls.player_src[0]    = 1;   // Teclado + raton
+    ls.deadzone[0]      = 10;
+    ls.pad_mode[0]      = 1;   // 6 botones
+
+    // Cargar ajustes previos si existen en settings.toml
+    FILE *fset = fopen("settings.toml", "r");
+    if (fset) {
+        char line[256];
+        while (fgets(line, sizeof(line), fset)) {
+            int v = 0;
+            if (sscanf(line, "fullscreen = %d", &v) == 1) ls.fullscreen = v;
+            else if (sscanf(line, "window_scale = %d", &v) == 1) ls.window_scale = v;
+            else if (sscanf(line, "widescreen = %d", &v) == 1) ls.widescreen = v;
+            else if (sscanf(line, "linear_filter = %d", &v) == 1) ls.linear_filter = v;
+            else if (sscanf(line, "volume = %d", &v) == 1) ls.volume = v;
+        }
+        fclose(fset);
+    }
+
+    RecompLauncherCGameInfo gi;
+    memset(&gi, 0, sizeof(gi));
+    gi.name                 = "SNATCHER";
+    gi.region               = "Sega Mega-CD (Español)";
+    gi.platform             = "SEGA MEGA-CD";
+    gi.theme                = "genesis";
+    gi.rom_noun             = "Disco";
+    gi.widescreen_supported = 1;
+    gi.aspect_mask          = 3; // 4:3 y 16:9
+    gi.pad_mode_supported   = 1;
+    gi.pad_mode_selectable  = 1;
+    gi.num_players          = 1;
+    gi.sram_path            = "saves/snatcher.bram";
+    gi.keybinds_path        = "keybinds.ini";
+    gi.config_path          = "settings.toml";
+
+    recomp_launcher_set_preserve_sdl(1);
+
+    const char *assets_dir = "assets";
+    if (!file_exists_and_size("assets/fonts/LatoLatin-Regular.ttf", NULL)) {
+        if (file_exists_and_size("snatcher-recomp/assets/fonts/LatoLatin-Regular.ttf", NULL)) {
+            assets_dir = "snatcher-recomp/assets";
+        }
+    }
+
+    char picked[MAX_PATH] = { 0 };
+    int lr = recomp_launcher_run_window(
+        "Snatcher (Sega Mega-CD) — Launcher & Ajustes",
+        &ls,
+        &gi,
+        assets_dir,
+        (disc_path_io && disc_path_io[0]) ? disc_path_io : "",
+        picked,
+        sizeof(picked)
+    );
+
+    // Guardar configuracion seleccionada en settings.toml
+    fset = fopen("settings.toml", "w");
+    if (fset) {
+        fprintf(fset, "# Snatcher Mega-CD Recomp - Settings\n");
+        fprintf(fset, "fullscreen = %d\n", ls.fullscreen);
+        fprintf(fset, "window_scale = %d\n", ls.window_scale);
+        fprintf(fset, "widescreen = %d\n", ls.widescreen);
+        fprintf(fset, "linear_filter = %d\n", ls.linear_filter);
+        fprintf(fset, "volume = %d\n", ls.volume);
+        fclose(fset);
+    }
+
+    if (picked[0] != '\0' && disc_path_io && disc_path_cap > 0) {
+        strncpy(disc_path_io, picked, disc_path_cap - 1);
+        disc_path_io[disc_path_cap - 1] = '\0';
+    }
+
+    if (cfg_out) {
+        cfg_out->fullscreen = ls.fullscreen;
+        cfg_out->window_scale = ls.window_scale;
+        cfg_out->widescreen = ls.widescreen;
+        cfg_out->linear_filter = ls.linear_filter;
+        cfg_out->volume = ls.volume;
+        cfg_out->mouse_enabled = ls.mouse_enabled;
+    }
+
+    return lr;
+}
+
 int main(int argc, char **argv) {
     log_debug("=== Snatcher Recomp Starting ===");
+    recompui_keybinds_init(NULL);
     char bios_path[MAX_PATH] = { 0 };
     char disc_path[MAX_PATH] = { 0 };
     char backup_path[MAX_PATH] = { 0 };
     char settings_path[MAX_PATH] = { 0 };
     int max_frames = 0;
+    int no_launcher = 0;
 
     for (int i = 1; i < argc; ++i) {
         if (i + 1 < argc && !strcmp(argv[i], "--bios"))     strncpy(bios_path, argv[++i], sizeof(bios_path) - 1);
@@ -225,6 +354,7 @@ int main(int argc, char **argv) {
         else if (i + 1 < argc && !strcmp(argv[i], "--backup")) strncpy(backup_path, argv[++i], sizeof(backup_path) - 1);
         else if (i + 1 < argc && !strcmp(argv[i], "--settings")) strncpy(settings_path, argv[++i], sizeof(settings_path) - 1);
         else if (i + 1 < argc && !strcmp(argv[i], "--max-frames")) max_frames = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--no-launcher")) no_launcher = 1;
     }
 
     // 1. Deteccion automatica de la imagen de disco de Snatcher
@@ -344,16 +474,6 @@ int main(int argc, char **argv) {
     snprintf(buf, sizeof(buf), "Disc path resolved: [%s]", disc_path);
     log_debug(buf);
 
-    if (disc_path[0] == '\0') {
-        log_debug("ERROR: Disc path is empty!");
-        MessageBoxA(NULL,
-            "MegaCD-Recomp requiere la imagen de disco de Snatcher.\n\n"
-            "Por favor, copia tus archivos SNATCHER.CUE y SNATCHER.BIN\n"
-            "dentro de la carpeta 'disc/' y vuelve a iniciar el juego.",
-            "MegaCD-Recomp — Imagen de disco requerida", MB_ICONWARNING);
-        return 1;
-    }
-
     // 2. Deteccion automatica de BIOS de Sega CD (128 KB)
     log_debug("Step 2: checking BIOS...");
     if (bios_path[0] == '\0') {
@@ -442,6 +562,41 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    // 2b. Launcher moderno con configuracion de resolución, controles, audio y mejoras
+    SnatcherLauncherConfig launcher_cfg = {
+        .fullscreen = 0,
+        .window_scale = 3,
+        .widescreen = 1,
+        .linear_filter = 1,
+        .volume = 100,
+        .mouse_enabled = 1
+    };
+
+    if (!no_launcher && max_frames == 0) {
+        log_debug("Step 2b: Showing Recomp Launcher UI...");
+        int lr = run_snatcher_launcher(disc_path, sizeof(disc_path), &launcher_cfg);
+        if (lr == 1) { // RECOMP_LAUNCHER_RESULT_QUIT
+            log_debug("Launcher closed by user.");
+            return 0;
+        }
+        if (disc_path[0] != '\0') {
+            char prepared[MAX_PATH] = { 0 };
+            if (prepare_disc_image(disc_path, prepared, sizeof(prepared))) {
+                strncpy(disc_path, prepared, sizeof(disc_path) - 1);
+            }
+        }
+    }
+
+    if (disc_path[0] == '\0') {
+        log_debug("ERROR: Disc path is empty!");
+        MessageBoxA(NULL,
+            "MegaCD-Recomp requiere la imagen de disco de Snatcher.\n\n"
+            "Por favor, copia tus archivos SNATCHER.CUE y SNATCHER.BIN\n"
+            "dentro de la carpeta 'disc/' y vuelve a iniciar el juego.",
+            "MegaCD-Recomp — Imagen de disco requerida", MB_ICONWARNING);
+        return 1;
+    }
+
     // 3. Inicializacion de SDL
     log_debug("Step 3: Initializing SDL...");
     if (SDL_Init(SDL_INIT_AUDIO | SDL_INIT_TIMER | SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER) != 0) {
@@ -515,18 +670,27 @@ int main(int argc, char **argv) {
         segacd_native_audio_attach_io(audio, &machine.coordinator.io);
         machine.audio_write = segacd_native_audio_write;
         machine.audio_user = audio;
-        audio_set_master_volume(100);
+        audio_set_master_volume(launcher_cfg.volume);
     }
 
     // 7. Creacion de la ventana de juego
     log_debug("Step 7: Creating SDL window...");
-    int win_w = 1280;
-    int win_h = 720;
+    int scale = launcher_cfg.window_scale > 0 ? launcher_cfg.window_scale : 3;
+    int base_w = launcher_cfg.widescreen ? 426 : 320;
+    int base_h = 224;
+    int win_w = base_w * scale;
+    int win_h = base_h * scale;
+
+    Uint32 win_flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI;
+    if (launcher_cfg.fullscreen) {
+        win_flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
+    }
+
     SDL_Window *window = SDL_CreateWindow(
         "Snatcher (Mega-CD) — Native PC Port [Español]",
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
         win_w, win_h,
-        SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI
+        win_flags
     );
     if (!window) {
         snprintf(buf, sizeof(buf), "SDL_CreateWindow failed: %s", SDL_GetError());
@@ -556,6 +720,15 @@ int main(int argc, char **argv) {
         log_debug("Presentation created OK.");
     }
 
+    // Restaurar título y tamaño tras presentation_create
+    SDL_SetWindowTitle(window, "Snatcher (Mega-CD) — Native PC Port [Español]");
+    if (launcher_cfg.fullscreen) {
+        SDL_SetWindowFullscreen(window, SDL_WINDOW_FULLSCREEN_DESKTOP);
+    } else {
+        SDL_SetWindowSize(window, win_w, win_h);
+        SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
+    }
+
     // Mando de juego
     SDL_GameController *pad = NULL;
     for (int i = 0; i < SDL_NumJoysticks(); ++i) {
@@ -566,9 +739,13 @@ int main(int argc, char **argv) {
     }
 
     // Modo Panorámico
-    widescreen = segacd_widescreen_create(&machine, segacd_standalone_program());
-    if (widescreen) {
-        segacd_widescreen_prepare(widescreen, 426); // Relación 16:9 (320*16/9 ≈ 426)
+    if (launcher_cfg.widescreen) {
+        widescreen = segacd_widescreen_create(&machine, segacd_standalone_program());
+        if (widescreen) {
+            segacd_widescreen_prepare(widescreen, 426); // Relación 16:9 (320*16/9 ≈ 426)
+        }
+    } else {
+        widescreen = NULL;
     }
 
     snatcher_justifier_set_resolution(win_w, win_h);
@@ -595,11 +772,17 @@ int main(int argc, char **argv) {
                 win_h = event.window.data2;
                 snatcher_justifier_set_resolution(win_w, win_h);
             } else if (event.type == SDL_MOUSEMOTION) {
-                snatcher_justifier_update_mouse(event.motion.x, event.motion.y, win_w, win_h);
+                if (launcher_cfg.mouse_enabled) {
+                    snatcher_justifier_update_mouse(event.motion.x, event.motion.y, win_w, win_h);
+                }
             } else if (event.type == SDL_MOUSEBUTTONDOWN) {
-                snatcher_justifier_button_down(event.button.button);
+                if (launcher_cfg.mouse_enabled) {
+                    snatcher_justifier_button_down(event.button.button);
+                }
             } else if (event.type == SDL_MOUSEBUTTONUP) {
-                snatcher_justifier_button_up(event.button.button);
+                if (launcher_cfg.mouse_enabled) {
+                    snatcher_justifier_button_up(event.button.button);
+                }
             }
 
             if (presentation && segacd_presentation_handle_event(presentation, &event)) {
@@ -607,15 +790,25 @@ int main(int argc, char **argv) {
             }
         }
 
-        // Lectura de mandos
-        uint16_t buttons = keyboard_pad() | controller_pad(pad);
-        segacd_machine_pad(&machine, 0, buttons);
+        int menu_open = presentation && segacd_presentation_is_open(presentation);
+        audio_set_playback_enabled(!menu_open);
 
-        // Ejecutar un fotograma nativo de Mega-CD
-        M68kStepResult res = segacd_machine_run_frame(&machine);
-        if (max_frames > 0 && machine.frames >= (uint64_t)max_frames) {
-            quit = 1;
-        }
+        if (!menu_open) {
+            // Lectura de mandos
+            int block_input = segacd_presentation_blocks_game_input(presentation);
+            uint16_t buttons = block_input ? 0 : (keyboard_pad() | controller_pad(pad));
+            segacd_machine_pad(&machine, 0, buttons);
+
+            // Ejecutar un fotograma nativo de Mega-CD
+            M68kStepResult res = segacd_machine_run_frame(&machine);
+            if (max_frames > 0 && machine.frames >= (uint64_t)max_frames) {
+                quit = 1;
+            }
+
+            // Enviar buffer de audio nativo hacia SDL2
+            if (audio) {
+                segacd_native_audio_finish_frame(audio, machine.frames * 896040u, (uint32_t)machine.frames, 1);
+            }
         static uint64_t last_logged_frame = 0;
         static int error_logged = 0;
         if (res != M68K_STEP_OK && !error_logged) {
@@ -717,6 +910,7 @@ int main(int argc, char **argv) {
             log_debug(msg);
             last_logged_frame = machine.frames;
         }
+    }
 
         // Renderizado del fotograma
         if (presentation) {

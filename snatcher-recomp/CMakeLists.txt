@@ -65,8 +65,6 @@ set(SNATCHER_SOURCES
     ${ENGINE_ROOT}/runner/cd/debug.c
     ${ENGINE_ROOT}/runner/cd/presentation.c
     ${ENGINE_ROOT}/runner/cd/presentation_ui.c
-    ${RECOMP_UI_ROOT}/src/common/recomp_runtime_ui.c
-    ${RECOMP_UI_ROOT}/src/common/recomp_runtime_settings.c
     ${ENGINE_ROOT}/runner/video/genesis_bus.c
     ${ENGINE_ROOT}/runner/video/genesis_vdp.c
     ${ENGINE_ROOT}/runner/audio.c
@@ -81,6 +79,9 @@ set(SNATCHER_SOURCES
 
 add_executable(Snatcher_Recompiled ${SNATCHER_SOURCES})
 
+include("${RECOMP_UI_ROOT}/recomp_ui.cmake")
+recomp_target_launcher_ui(Snatcher_Recompiled CONSOLE genesis)
+
 target_compile_definitions(Snatcher_Recompiled PRIVATE
     _CRT_SECURE_NO_WARNINGS
     SNATCHER_RECOMP=1
@@ -90,12 +91,12 @@ target_compile_definitions(Snatcher_Recompiled PRIVATE
 set(SDL2_LIB_DIR "${ENGINE_ROOT}/runner/external/SDL2/SDL2-2.28.5/lib/x64")
 target_link_libraries(Snatcher_Recompiled PRIVATE
     "${SDL2_LIB_DIR}/SDL2.lib"
-    "${SDL2_LIB_DIR}/SDL2main.lib"
     ws2_32
 )
 
 set_target_properties(Snatcher_Recompiled PROPERTIES
     WIN32_EXECUTABLE TRUE
+    LINK_FLAGS "/ENTRY:mainCRTStartup"
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/build-release"
 )
 

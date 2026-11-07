@@ -1,8 +1,15 @@
 # Build directories and temporary artifacts
 /build/
+build/
 /build-*/
+build-*/
 /build-release/
+build-release/
 /build-tools/
+build-tools/
+snatcher-recomp/build/
+snatcher-recomp/build-release/
+snatcher-recomp/build-release/Release/
 bin/
 obj/
 *.obj
@@ -16,6 +23,7 @@ obj/
 *.tmp
 frame_*.bmp
 frame_*.png
+settings.toml
 
 # Visual Studio files
 .vs/
