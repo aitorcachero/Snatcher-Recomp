@@ -32,7 +32,10 @@ if %errorlevel% neq 0 (
     exit /b %errorlevel%
 )
 
-if exist "build\snatcher-recomp\Release\Snatcher_Recompiled.exe" (
+if exist "snatcher-recomp\build-release\Release\Snatcher_Recompiled.exe" (
+    copy /y "snatcher-recomp\build-release\Release\Snatcher_Recompiled.exe" "Snatcher.exe" >nul
+    copy /y "snatcher-recomp\build-release\Release\Snatcher_Recompiled.exe" "snatcher-recomp\Snatcher.exe" >nul
+) else if exist "build\snatcher-recomp\Release\Snatcher_Recompiled.exe" (
     copy /y "build\snatcher-recomp\Release\Snatcher_Recompiled.exe" "Snatcher.exe" >nul
     copy /y "build\snatcher-recomp\Release\Snatcher_Recompiled.exe" "snatcher-recomp\Snatcher.exe" >nul
 )

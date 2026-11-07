@@ -10,6 +10,7 @@
 #include "../../segagenesisrecomp/runner/cd/sonic_cd_widescreen.h"
 #include "../../segagenesisrecomp/runner/cd/m68k_floor.h"
 #include "../../segagenesisrecomp/runner/audio.h"
+#include "snatcher_cue.h"
 #include <SDL2/SDL.h>
 #include <windows.h>
 #include <commdlg.h>
@@ -143,6 +144,73 @@ static int prompt_select_file(const char *title, const char *filter, char *out_p
 }
 extern uint8_t g_ram[0x10000];
 
+static int is_file_ext(const char *path, const char *ext) {
+    size_t len = strlen(path);
+    size_t elen = strlen(ext);
+    if (len < elen) return 0;
+    return _stricmp(path + len - elen, ext) == 0;
+}
+
+static int prepare_disc_image(const char *input_path, char *out_disc_path, size_t out_max) {
+    if (!input_path || input_path[0] == '\0') return 0;
+
+    // Si ya es un .sgcd existente, usarlo directamente
+    if (is_file_ext(input_path, ".sgcd")) {
+        if (file_exists_and_size(input_path, NULL)) {
+            strncpy(out_disc_path, input_path, out_max - 1);
+            return 1;
+        }
+        return 0;
+    }
+
+    // Si es un .bin
+    char cue_file[MAX_PATH] = { 0 };
+    if (is_file_ext(input_path, ".bin")) {
+        if (!ensure_snatcher_cue_exists(input_path, cue_file, sizeof(cue_file))) {
+            return 0;
+        }
+        input_path = cue_file;
+    }
+
+    // Si es un .cue
+    if (is_file_ext(input_path, ".cue")) {
+        char target_sgcd[MAX_PATH] = { 0 };
+        if (strstr(input_path, "disc") != NULL) {
+            strncpy(target_sgcd, "disc/snatcher.sgcd", sizeof(target_sgcd) - 1);
+        } else {
+            strncpy(target_sgcd, input_path, sizeof(target_sgcd) - 1);
+            char *dot = strrchr(target_sgcd, '.');
+            if (dot) strcpy(dot, ".sgcd");
+        }
+
+        // Si ya existe el .sgcd y tiene tamano suficiente (> 10 MB)
+        size_t sz = 0;
+        if (file_exists_and_size(target_sgcd, &sz) && sz > 10 * 1024 * 1024) {
+            strncpy(out_disc_path, target_sgcd, out_max - 1);
+            return 1;
+        }
+
+        // Convertir CUE a SGCD
+        char log_buf[1024];
+        snprintf(log_buf, sizeof(log_buf), "Converting CUE to SGCD: [%s] -> [%s]...", input_path, target_sgcd);
+        log_debug(log_buf);
+
+        char err[512] = { 0 };
+        CreateDirectoryA("disc", NULL);
+        if (!convert_cue_to_sgcd(input_path, target_sgcd, err, sizeof(err))) {
+            log_debug(err);
+            MessageBoxA(NULL, err, "Error al procesar CUE de Snatcher", MB_ICONERROR);
+            return 0;
+        }
+
+        log_debug("Conversion to SGCD completed successfully.");
+        strncpy(out_disc_path, target_sgcd, out_max - 1);
+        return 1;
+    }
+
+    return 0;
+}
+
 int main(int argc, char **argv) {
     log_debug("=== Snatcher Recomp Starting ===");
     char bios_path[MAX_PATH] = { 0 };
@@ -161,35 +229,130 @@ int main(int argc, char **argv) {
 
     // 1. Deteccion automatica de la imagen de disco de Snatcher
     log_debug("Step 1: checking disc...");
+    if (disc_path[0] != '\0') {
+        char prepared[MAX_PATH] = { 0 };
+        if (prepare_disc_image(disc_path, prepared, sizeof(prepared))) {
+            strncpy(disc_path, prepared, sizeof(disc_path) - 1);
+        }
+    }
+
     if (disc_path[0] == '\0') {
-        const char *disc_candidates[] = {
+        // 1a. Buscar .sgcd existentes
+        const char *sgcd_candidates[] = {
             "disc/snatcher.sgcd",
+            "snatcher.sgcd",
             "snatcher-recomp/disc/snatcher.sgcd",
             "../disc/snatcher.sgcd",
             "../../disc/snatcher.sgcd",
             "../../../disc/snatcher.sgcd",
-            "../../snatcher-recomp/disc/snatcher.sgcd",
-            "../../../snatcher-recomp/disc/snatcher.sgcd",
-            "G:/Proyectos/sega megadrive/snatcher-recomp/disc/snatcher.sgcd",
-            "G:/Proyectos/sega megadrive/disc/snatcher.sgcd",
-            "disc/SNATCHER.CUE",
-            "snatcher-recomp/disc/SNATCHER.CUE",
-            "../disc/SNATCHER.CUE",
-            "../../disc/SNATCHER.CUE",
-            "../../../disc/SNATCHER.CUE",
-            "snatcher.sgcd",
             NULL
         };
-        for (int i = 0; disc_candidates[i] != NULL; i++) {
-            if (file_exists_and_size(disc_candidates[i], NULL)) {
-                strncpy(disc_path, disc_candidates[i], sizeof(disc_path) - 1);
+        for (int i = 0; sgcd_candidates[i] != NULL; i++) {
+            if (file_exists_and_size(sgcd_candidates[i], NULL)) {
+                strncpy(disc_path, sgcd_candidates[i], sizeof(disc_path) - 1);
                 break;
             }
         }
     }
+
+    if (disc_path[0] == '\0') {
+        // 1b. Buscar cualquier .sgcd en carpeta disc/
+        WIN32_FIND_DATAA ffd;
+        HANDLE hFind = FindFirstFileA("disc\\*.sgcd", &ffd);
+        if (hFind != INVALID_HANDLE_VALUE) {
+            snprintf(disc_path, sizeof(disc_path), "disc\\%s", ffd.cFileName);
+            FindClose(hFind);
+        }
+    }
+
+    if (disc_path[0] == '\0') {
+        // 1c. Buscar archivos .cue candidatos
+        const char *cue_candidates[] = {
+            "disc/SNATCHER.CUE",
+            "disc/snatcher.cue",
+            "SNATCHER.CUE",
+            "snatcher.cue",
+            "snatcher-recomp/disc/SNATCHER.CUE",
+            "snatcher-recomp/disc/snatcher.cue",
+            "../disc/SNATCHER.CUE",
+            "../disc/snatcher.cue",
+            "../../disc/SNATCHER.CUE",
+            "../../disc/snatcher.cue",
+            "../../../disc/SNATCHER.CUE",
+            NULL
+        };
+        for (int i = 0; cue_candidates[i] != NULL; i++) {
+            if (file_exists_and_size(cue_candidates[i], NULL)) {
+                char prepared[MAX_PATH] = { 0 };
+                if (prepare_disc_image(cue_candidates[i], prepared, sizeof(prepared))) {
+                    strncpy(disc_path, prepared, sizeof(disc_path) - 1);
+                    break;
+                }
+            }
+        }
+    }
+
+    if (disc_path[0] == '\0') {
+        // 1d. Buscar cualquier .cue en disc/
+        WIN32_FIND_DATAA ffd;
+        HANDLE hFind = FindFirstFileA("disc\\*.cue", &ffd);
+        if (hFind != INVALID_HANDLE_VALUE) {
+            char found_cue[MAX_PATH];
+            snprintf(found_cue, sizeof(found_cue), "disc\\%s", ffd.cFileName);
+            FindClose(hFind);
+            char prepared[MAX_PATH] = { 0 };
+            if (prepare_disc_image(found_cue, prepared, sizeof(prepared))) {
+                strncpy(disc_path, prepared, sizeof(disc_path) - 1);
+            }
+        }
+    }
+
+    if (disc_path[0] == '\0') {
+        // 1e. Buscar SNATCHER.BIN en disc/ (si el usuario solo coloco el .bin)
+        const char *bin_candidates[] = {
+            "disc/SNATCHER.BIN",
+            "disc/snatcher.bin",
+            "SNATCHER.BIN",
+            "snatcher.bin",
+            NULL
+        };
+        for (int i = 0; bin_candidates[i] != NULL; i++) {
+            if (file_exists_and_size(bin_candidates[i], NULL)) {
+                char prepared[MAX_PATH] = { 0 };
+                if (prepare_disc_image(bin_candidates[i], prepared, sizeof(prepared))) {
+                    strncpy(disc_path, prepared, sizeof(disc_path) - 1);
+                    break;
+                }
+            }
+        }
+    }
+
+    // 1f. Si aun no se encuentra, abrir selector de archivos de Windows
+    if (disc_path[0] == '\0') {
+        char picked[MAX_PATH] = { 0 };
+        if (prompt_select_file("Selecciona la imagen de Snatcher (.sgcd, .cue, .bin)",
+                               "Imagenes Sega CD (*.sgcd;*.cue;*.bin)\0*.sgcd;*.cue;*.bin\0Todos (*.*)\0*.*\0",
+                               picked, sizeof(picked))) {
+            char prepared[MAX_PATH] = { 0 };
+            if (prepare_disc_image(picked, prepared, sizeof(prepared))) {
+                strncpy(disc_path, prepared, sizeof(disc_path) - 1);
+            }
+        }
+    }
+
     char buf[1024];
     snprintf(buf, sizeof(buf), "Disc path resolved: [%s]", disc_path);
     log_debug(buf);
+
+    if (disc_path[0] == '\0') {
+        log_debug("ERROR: Disc path is empty!");
+        MessageBoxA(NULL,
+            "MegaCD-Recomp requiere la imagen de disco de Snatcher.\n\n"
+            "Por favor, copia tus archivos SNATCHER.CUE y SNATCHER.BIN\n"
+            "dentro de la carpeta 'disc/' y vuelve a iniciar el juego.",
+            "MegaCD-Recomp — Imagen de disco requerida", MB_ICONWARNING);
+        return 1;
+    }
 
     // 2. Deteccion automatica de BIOS de Sega CD (128 KB)
     log_debug("Step 2: checking BIOS...");

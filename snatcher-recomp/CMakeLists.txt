@@ -36,6 +36,7 @@ set(SNATCHER_SOURCES
     src/snatcher_program.c
     src/snatcher_justifier_mouse.c
     src/snatcher_widescreen.c
+    src/snatcher_cue.c
     src/snatcher_standalone.c
     ${MAIN_GEN_SOURCES}
     ${SUB_GEN_SOURCES}
