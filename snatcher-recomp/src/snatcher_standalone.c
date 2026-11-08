@@ -171,15 +171,27 @@ static int file_exists_and_size(const char *path, size_t *out_size) {
 }
 
 static int prompt_select_file(const char *title, const char *filter, char *out_path, size_t max_len) {
+    HWND hwnd = GetActiveWindow();
+    if (!hwnd) hwnd = GetForegroundWindow();
+    if (hwnd) EnableWindow(hwnd, FALSE);
+
     OPENFILENAMEA ofn;
     memset(&ofn, 0, sizeof(ofn));
     ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = hwnd;
     ofn.lpstrTitle = title;
     ofn.lpstrFilter = filter;
     ofn.lpstrFile = out_path;
     ofn.nMaxFile = (DWORD)max_len;
-    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
-    return GetOpenFileNameA(&ofn);
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER | OFN_NOCHANGEDIR;
+    BOOL ret = GetOpenFileNameA(&ofn);
+
+    if (hwnd) {
+        EnableWindow(hwnd, TRUE);
+        SetForegroundWindow(hwnd);
+        SetActiveWindow(hwnd);
+    }
+    return ret;
 }
 extern uint8_t g_ram[0x10000];
 

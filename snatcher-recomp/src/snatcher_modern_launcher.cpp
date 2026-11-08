@@ -6,6 +6,7 @@
 
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_opengl.h>
+#include <SDL2/SDL_syswm.h>
 #include "imgui.h"
 #include "imgui_impl_sdl2.h"
 #include "imgui_impl_opengl3.h"
@@ -29,16 +30,68 @@ typedef struct {
     int color_mode;       // 0: Raw original, 1: As on a TV
 } SnatcherLauncherConfig;
 
-static bool prompt_browse_disc(char *out_path, size_t max_len) {
+static UINT_PTR CALLBACK BrowseHookProc(HWND hdlg, UINT uiMsg, WPARAM wParam, LPARAM lParam) {
+    if (uiMsg == WM_INITDIALOG) {
+        HWND hParent = GetParent(hdlg);
+        HWND target = hParent ? hParent : hdlg;
+        SetWindowPos(target, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+        BringWindowToTop(target);
+        SetForegroundWindow(target);
+        SetActiveWindow(target);
+    }
+    return 0;
+}
+
+static bool prompt_browse_disc(SDL_Window *window, char *out_path, size_t max_len) {
+    HWND hwnd = NULL;
+    if (window) {
+        SDL_SysWMinfo wmInfo;
+        SDL_VERSION(&wmInfo.version);
+        if (SDL_GetWindowWMInfo(window, &wmInfo)) {
+            hwnd = wmInfo.info.win.window;
+        }
+    }
+    if (!hwnd) {
+        hwnd = GetActiveWindow();
+        if (!hwnd) hwnd = GetForegroundWindow();
+    }
+
+    // Deshabilitar la ventana principal para bloquear toda interacción mientras el diálogo esté abierto
+    if (hwnd) {
+        EnableWindow(hwnd, FALSE);
+    }
+
+    char file_buf[MAX_PATH] = { 0 };
+    if (out_path && out_path[0]) {
+        strncpy(file_buf, out_path, sizeof(file_buf) - 1);
+    }
+
     OPENFILENAMEA ofn;
     memset(&ofn, 0, sizeof(ofn));
     ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = hwnd;
     ofn.lpstrTitle = "Selecciona la imagen de Snatcher (.sgcd, .cue, .bin)";
     ofn.lpstrFilter = "Imagenes Sega CD (*.sgcd;*.cue;*.bin)\0*.sgcd;*.cue;*.bin\0Todos los archivos (*.*)\0*.*\0";
-    ofn.lpstrFile = out_path;
-    ofn.nMaxFile = (DWORD)max_len;
-    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
-    return GetOpenFileNameA(&ofn) != 0;
+    ofn.lpstrFile = file_buf;
+    ofn.nMaxFile = (DWORD)sizeof(file_buf);
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER | OFN_NOCHANGEDIR | OFN_ENABLEHOOK | OFN_ENABLESIZING;
+    ofn.lpfnHook = BrowseHookProc;
+
+    BOOL ok = GetOpenFileNameA(&ofn);
+
+    // Reactivar la ventana principal y devolverle el foco
+    if (hwnd) {
+        EnableWindow(hwnd, TRUE);
+        SetForegroundWindow(hwnd);
+        SetActiveWindow(hwnd);
+    }
+
+    if (ok && file_buf[0]) {
+        strncpy(out_path, file_buf, max_len - 1);
+        out_path[max_len - 1] = '\0';
+        return true;
+    }
+    return false;
 }
 
 static GLuint load_texture_from_bmp(const char *path, int *out_w, int *out_h) {
@@ -376,7 +429,7 @@ extern "C" int run_snatcher_modern_launcher(char *disc_path_io, size_t disc_path
         if (font_bold) ImGui::PopFont();
 
         if (font_regular) ImGui::PushFont(font_regular);
-        draw->AddText(ImVec2(28.0f * scale, win_h - 50.0f * scale), IM_COL32(148, 163, 184, 230), "PC Native Recompilation v1.0.3 • Auto / 60 / 144 / 240 / 360 Hz");
+        draw->AddText(ImVec2(28.0f * scale, win_h - 50.0f * scale), IM_COL32(148, 163, 184, 230), "PC Native Recompilation v1.0.4 • Auto / 60 / 144 / 240 / 360 Hz");
         if (font_regular) ImGui::PopFont();
 
         ImGui::EndChild();
@@ -467,7 +520,7 @@ extern "C" int run_snatcher_modern_launcher(char *disc_path_io, size_t disc_path
             ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
             if (ImGui::Button("Examinar...", ImVec2(120.0f * scale, 0))) {
                 char picked[MAX_PATH] = { 0 };
-                if (prompt_browse_disc(picked, sizeof(picked))) {
+                if (prompt_browse_disc(window, picked, sizeof(picked))) {
                     strncpy(current_disc, picked, sizeof(current_disc) - 1);
                 }
             }
