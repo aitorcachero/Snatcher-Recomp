@@ -14,7 +14,6 @@ struct SegaCDWidescreen {
     unsigned width;
     unsigned height;
     uint32_t canvas[MAX_WS_HEIGHT][MAX_WS_WIDTH];
-    uint32_t epx_temp[448][512];
     uint64_t expanded_frames;
     uint64_t original_frames;
     uint64_t scene_rejections;
@@ -87,6 +86,17 @@ static inline uint32_t apply_scanline(uint32_t c) {
     return (0xFF000000 | (r << 16) | (g << 8) | b);
 }
 
+static inline uint32_t blend2(uint32_t c1, uint32_t c2, int weight_c2_256) {
+    if (c1 == c2 || weight_c2_256 <= 0) return c1;
+    if (weight_c2_256 >= 256) return c2;
+    int w2 = weight_c2_256;
+    int w1 = 256 - w2;
+    uint32_t r = (((c1 >> 16) & 0xFF) * w1 + ((c2 >> 16) & 0xFF) * w2) >> 8;
+    uint32_t g = (((c1 >> 8) & 0xFF) * w1 + ((c2 >> 8) & 0xFF) * w2) >> 8;
+    uint32_t b = ((c1 & 0xFF) * w1 + (c2 & 0xFF) * w2) >> 8;
+    return (0xFF000000 | (r << 16) | (g << 8) | b);
+}
+
 const uint32_t *segacd_widescreen_frame(SegaCDWidescreen *ws, unsigned *width,
                                        unsigned *height, unsigned *pitch) {
     if (!ws || !ws->machine) return NULL;
@@ -96,76 +106,85 @@ const uint32_t *segacd_widescreen_frame(SegaCDWidescreen *ws, unsigned *width,
 
     int is_wide = (ws->width > 320 && ws->state == SEGACD_WIDESCREEN_ACTIVE);
 
-    // ── MODO 3: FILTRO EPX / Scale2x (MEJORA Y SUAVIZADO HD DE TIPOGRAFÍAS Y TEXTOS) ──
-    if (ws->filter_mode == 3) {
-        // Paso 1: Aplicar Scale2x / EPX sobre la matriz original de 256x224 píxeles del juego.
-        // Esto redondea los trazos diagonales y esquinas de las fuentes sin añadir borrosidad.
-        for (unsigned y = 0; y < 224; y++) {
-            unsigned y_up = (y > 0) ? y - 1 : y;
-            unsigned y_dn = (y < 223) ? y + 1 : y;
-            for (unsigned x = 0; x < 256; x++) {
-                unsigned x_lf = (x > 0) ? x - 1 : x;
-                unsigned x_rt = (x < 255) ? x + 1 : x;
-
-                uint32_t P = ws->machine->pixels[y][x];
-                uint32_t A = ws->machine->pixels[y_up][x];
-                uint32_t C = ws->machine->pixels[y][x_lf];
-                uint32_t B = ws->machine->pixels[y][x_rt];
-                uint32_t D = ws->machine->pixels[y_dn][x];
-
-                uint32_t p1 = P, p2 = P, p3 = P, p4 = P;
-                if (C == A && C != D && A != B) p1 = A;
-                if (A == B && A != C && B != D) p2 = B;
-                if (D == C && D != B && C != A) p3 = C;
-                if (B == D && B != A && D != C) p4 = D;
-
-                if (ws->color_mode) {
-                    p1 = apply_tv_color(p1);
-                    p2 = apply_tv_color(p2);
-                    p3 = apply_tv_color(p3);
-                    p4 = apply_tv_color(p4);
-                }
-
-                ws->epx_temp[2 * y    ][2 * x    ] = p1;
-                ws->epx_temp[2 * y    ][2 * x + 1] = p2;
-                ws->epx_temp[2 * y + 1][2 * x    ] = p3;
-                ws->epx_temp[2 * y + 1][2 * x + 1] = p4;
-            }
-        }
-
-        // Paso 2: Escalar la imagen EPX al lienzo final en alta resolución:
-        // En 16:9 panorámico: 796x448 (448 * 16 / 9 = 796.444).
-        // En 4:3 clásico: 512x448 exacto.
-        unsigned out_w = is_wide ? 796 : 512;
-        unsigned out_h = 448;
-
-        if (is_wide) {
-            for (unsigned y = 0; y < out_h; y++) {
-                for (unsigned x = 0; x < out_w; x++) {
-                    unsigned src_x = (x * 512) / out_w;
-                    if (src_x >= 512) src_x = 511;
-                    ws->canvas[y][x] = ws->epx_temp[y][src_x];
-                }
-            }
-        } else {
-            for (unsigned y = 0; y < out_h; y++) {
-                memcpy(&ws->canvas[y][0], &ws->epx_temp[y][0], 512 * sizeof(uint32_t));
-            }
-        }
-
-        ws->expanded_frames++;
-        if (width) *width = out_w;
-        if (height) *height = out_h;
-        if (pitch) *pitch = MAX_WS_WIDTH * sizeof(uint32_t);
-        return &ws->canvas[0][0];
-    }
-
-    // ── MODOS ESTÁNDAR (0: Sharp, 1: Smooth, 2: CRT Scanlines) ──
+    // Dimensiones canónicas exactas del lienzo (398x224 en 16:9, o game_w x 224 en 4:3)
     unsigned canvas_w = is_wide ? ws->width : game_w;
     if (canvas_w > MAX_WS_WIDTH) canvas_w = MAX_WS_WIDTH;
     if (canvas_w < game_w) canvas_w = game_w;
     unsigned canvas_h = game_h;
 
+    // ── MODO 3: FILTRO EPX / Scale2x (MEJORA Y SUAVIZADO HD DE TIPOGRAFÍAS Y TEXTOS) ──
+    if (ws->filter_mode == 3) {
+        for (unsigned y = 0; y < canvas_h && y < 240; y++) {
+            unsigned y_up = (y > 0) ? y - 1 : y;
+            unsigned y_dn = (y + 1 < game_h) ? y + 1 : y;
+
+            for (unsigned x = 0; x < canvas_w; x++) {
+                // Mapeo proporcional exacto a coordenadas del framebuffer nativo (256 o 320)
+                float fx = ((float)x + 0.5f) * (float)game_w / (float)canvas_w;
+                int src_x = (int)fx;
+                if (src_x >= (int)game_w) src_x = (int)game_w - 1;
+                float frac = fx - (float)src_x;
+
+                int x_lf = (src_x > 0) ? src_x - 1 : src_x;
+                int x_rt = (src_x + 1 < (int)game_w) ? src_x + 1 : src_x;
+
+                uint32_t P = ws->machine->pixels[y][src_x];
+                uint32_t A = ws->machine->pixels[y_up][src_x];
+                uint32_t D = ws->machine->pixels[y_dn][src_x];
+                uint32_t C = ws->machine->pixels[y][x_lf];
+                uint32_t B = ws->machine->pixels[y][x_rt];
+
+                // Reglas estándar Scale2x / EPX para detección de diagonales y esquinas
+                uint32_t p1 = (C == A && C != D && A != B) ? A : P;
+                uint32_t p2 = (A == B && A != C && B != D) ? B : P;
+                uint32_t p3 = (D == C && D != B && C != A) ? C : P;
+                uint32_t p4 = (B == D && B != A && D != C) ? D : P;
+
+                uint32_t px = P;
+
+                // Suavizado anti-aliasing sobre esquinas de glifos tipográficos
+                if (frac < 0.5f) {
+                    uint32_t corner = (p1 != P) ? p1 : p3;
+                    if (corner != P) {
+                        float edge_dist = 0.5f - frac;
+                        int weight = (int)(edge_dist * 2.0f * 110.0f);
+                        px = blend2(px, corner, weight);
+                    }
+                    if (frac < 0.20f && C != P) {
+                        float t = (0.20f - frac) / 0.20f;
+                        int bw = (int)(t * 70.0f);
+                        px = blend2(px, C, bw);
+                    }
+                } else {
+                    uint32_t corner = (p2 != P) ? p2 : p4;
+                    if (corner != P) {
+                        float edge_dist = frac - 0.5f;
+                        int weight = (int)(edge_dist * 2.0f * 110.0f);
+                        px = blend2(px, corner, weight);
+                    }
+                    if (frac > 0.80f && B != P) {
+                        float t = (frac - 0.80f) / 0.20f;
+                        int bw = (int)(t * 70.0f);
+                        px = blend2(px, B, bw);
+                    }
+                }
+
+                if (ws->color_mode) {
+                    px = apply_tv_color(px);
+                }
+
+                ws->canvas[y][x] = px;
+            }
+        }
+
+        ws->expanded_frames++;
+        if (width) *width = canvas_w;
+        if (height) *height = canvas_h;
+        if (pitch) *pitch = MAX_WS_WIDTH * sizeof(uint32_t);
+        return &ws->canvas[0][0];
+    }
+
+    // ── MODOS ESTÁNDAR (0: Sharp, 1: Smooth, 2: CRT Scanlines) ──
     // Si no está en panorámico y no hay efectos (modo Raw puro 4:3), devolver buffer nativo sin copia
     if (!is_wide && !ws->color_mode && ws->filter_mode != 2) {
         if (width) *width = game_w;
