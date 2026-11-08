@@ -556,7 +556,7 @@ int main(int argc, char **argv) {
         .fullscreen = 1,
         .window_scale = 3,
         .widescreen = 1,
-        .linear_filter = 1,
+        .linear_filter = 3, // EPX Texto HD por defecto
         .volume = 100,
         .mouse_enabled = 1,
         .refresh_rate = 0, // Auto: adapta a los hercios del monitor
@@ -765,7 +765,7 @@ int main(int argc, char **argv) {
     log_debug("Renderer created OK.");
 
     SDL_RenderSetIntegerScale(renderer, launcher_cfg.integer_scaling ? SDL_TRUE : SDL_FALSE);
-    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, (launcher_cfg.linear_filter == 1) ? "1" : "0");
+    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, (launcher_cfg.linear_filter == 1 || launcher_cfg.linear_filter == 3) ? "1" : "0");
 
     SegaCDPresentation *presentation = segacd_presentation_create(window, renderer, settings_path, 0);
     if (!presentation) {
@@ -796,11 +796,11 @@ int main(int argc, char **argv) {
         }
     }
 
-    // Modo Panorámico Widescreen y Efectos Visuales (Colores TV y Scanlines CRT)
+    // Modo Panorámico Widescreen y Efectos Visuales (Colores TV, Scanlines CRT y EPX Scale2x)
     widescreen = segacd_widescreen_create(&machine, segacd_standalone_program());
     if (widescreen) {
         segacd_widescreen_prepare(widescreen, launcher_cfg.widescreen ? 398 : 256);
-        segacd_widescreen_set_effects(widescreen, launcher_cfg.color_mode, (launcher_cfg.linear_filter == 2));
+        segacd_widescreen_set_effects(widescreen, launcher_cfg.color_mode, launcher_cfg.linear_filter);
     }
 
     snatcher_justifier_set_resolution(win_w, win_h);

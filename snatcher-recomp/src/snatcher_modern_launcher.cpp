@@ -125,7 +125,7 @@ extern "C" int run_snatcher_modern_launcher(char *disc_path_io, size_t disc_path
     int fullscreen = 1;
     int window_scale = 3;
     int widescreen = 1;
-    int linear_filter = 1; // 0: Sharp, 1: Smooth, 2: CRT Scanlines
+    int linear_filter = 3; // 0: Sharp, 1: Smooth, 2: CRT Scanlines, 3: EPX Scale2x (Texto HD)
     int volume = 100;
     int mouse_enabled = 1;
     int refresh_rate = 0; // 0: Auto (adapta a los hercios del monitor)
@@ -144,7 +144,9 @@ extern "C" int run_snatcher_modern_launcher(char *disc_path_io, size_t disc_path
             else if (sscanf(line, "view_mode = %d", &v) == 1) widescreen = (v != 0);
             else if (sscanf(line, "vsync = %d", &v) == 1) vsync = v;
             else if (sscanf(line, "filter = %d", &v) == 1) linear_filter = v;
-            else if (sscanf(line, "linear_filter = %d", &v) == 1) linear_filter = v;
+            else if (sscanf(line, "linear_filter = %d", &v) == 1) {
+                if (linear_filter < 2) linear_filter = v;
+            }
             else if (sscanf(line, "integer_scaling = %d", &v) == 1) integer_scaling = v;
             else if (sscanf(line, "color_mode = %d", &v) == 1) color_mode = v;
             else if (sscanf(line, "volume = %d", &v) == 1) volume = v;
@@ -429,7 +431,7 @@ extern "C" int run_snatcher_modern_launcher(char *disc_path_io, size_t disc_path
         if (font_bold) ImGui::PopFont();
 
         if (font_regular) ImGui::PushFont(font_regular);
-        draw->AddText(ImVec2(28.0f * scale, win_h - 50.0f * scale), IM_COL32(148, 163, 184, 230), "PC Native Recompilation v1.0.4 • Auto / 60 / 144 / 240 / 360 Hz");
+        draw->AddText(ImVec2(28.0f * scale, win_h - 50.0f * scale), IM_COL32(148, 163, 184, 230), "PC Native Recompilation v1.0.5 • EPX Texto HD • Auto / 60 / 144 / 240 / 360 Hz");
         if (font_regular) ImGui::PopFont();
 
         ImGui::EndChild();
@@ -547,8 +549,8 @@ extern "C" int run_snatcher_modern_launcher(char *disc_path_io, size_t disc_path
                 const char *sub1;
                 const char *sub2;
             } cards[4] = {
-                { "Recomendado", "Moderna", "1920x1080 (16:9)", "144 Hz, Panorámico, Suave" },
-                { NULL, "Steam Deck", "1280x800 (16:9)", "60 Hz, Portátil, Eficiente" },
+                { "Recomendado", "Moderna", "1920x1080 (16:9)", "Texto HD EPX, Auto Hz" },
+                { NULL, "Steam Deck", "1280x800 (16:9)", "Texto HD EPX, 60 Hz" },
                 { NULL, "Original 1994", "1280x960 (4:3)", "60 Hz, Píxel Nítido / Retro" },
                 { NULL, "Personalizado", "Ajustable", "Configura en Picture o Play" }
             };
@@ -598,9 +600,9 @@ extern "C" int run_snatcher_modern_launcher(char *disc_path_io, size_t disc_path
                 if (clicked) {
                     active_preset = i;
                     if (i == 0) { // Modern
-                        fullscreen = 1; window_scale = 3; widescreen = 1; linear_filter = 1; vsync = 1; refresh_rate = 0; integer_scaling = 0; color_mode = 1;
+                        fullscreen = 1; window_scale = 3; widescreen = 1; linear_filter = 3; vsync = 1; refresh_rate = 0; integer_scaling = 0; color_mode = 1;
                     } else if (i == 1) { // Steam Deck
-                        fullscreen = 1; window_scale = 2; widescreen = 1; linear_filter = 1; vsync = 1; refresh_rate = 60; integer_scaling = 0; color_mode = 1;
+                        fullscreen = 1; window_scale = 2; widescreen = 1; linear_filter = 3; vsync = 1; refresh_rate = 60; integer_scaling = 0; color_mode = 1;
                     } else if (i == 2) { // Original 1994
                         fullscreen = 0; window_scale = 3; widescreen = 0; linear_filter = 0; vsync = 1; refresh_rate = 60; integer_scaling = 1; color_mode = 1;
                     }
@@ -753,11 +755,11 @@ extern "C" int run_snatcher_modern_launcher(char *disc_path_io, size_t disc_path
             // 4. Filter
             ImGui::Text("Filter (Filtro gráfico):");
             ImGui::SameLine(320.0f * scale);
-            const char *filter_labels[] = { "Sharp (Nítido)", "Smooth (Suave)", "CRT Scanlines" };
-            for (int f = 0; f < 3; f++) {
+            const char *filter_labels[] = { "Sharp (Nítido)", "Smooth (Suave)", "CRT Scanlines", "EPX (Texto HD)" };
+            for (int f = 0; f < 4; f++) {
                 if (f > 0) ImGui::SameLine();
                 bool f_cur = (linear_filter == f);
-                float f_w = (f == 2) ? 140.0f * scale : 120.0f * scale;
+                float f_w = (f == 3) ? 145.0f * scale : ((f == 2) ? 135.0f * scale : 115.0f * scale);
                 if (f_cur) {
                     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(1.0f, 0.45f, 0.0f, 0.95f));
                     ImGui::Button(filter_labels[f], ImVec2(f_w, 30.0f * scale));
@@ -769,6 +771,18 @@ extern "C" int run_snatcher_modern_launcher(char *disc_path_io, size_t disc_path
                     }
                 }
             }
+
+            if (font_small) ImGui::PushFont(font_small);
+            if (linear_filter == 3) {
+                ImGui::TextColored(ImVec4(0.40f, 0.85f, 0.45f, 1.0f), "Filtro EPX / Scale2x activo: Suavizado inteligente para textos y pixel art en alta resolución sin borrosidad.");
+            } else if (linear_filter == 2) {
+                ImGui::TextColored(ImVec4(0.85f, 0.75f, 0.40f, 1.0f), "Filtro CRT Scanlines activo: Lineas de barrido analogicas simulando un monitor de tubo clasico.");
+            } else if (linear_filter == 1) {
+                ImGui::TextColored(ImVec4(0.65f, 0.75f, 0.90f, 1.0f), "Filtro Smooth activo: Interpolacion bilineal suave general.");
+            } else {
+                ImGui::TextColored(ImVec4(0.65f, 0.75f, 0.90f, 1.0f), "Filtro Sharp activo: Pixeles nitidos retro clasicos 1:1 sin suavizado.");
+            }
+            if (font_small) ImGui::PopFont();
 
             // 5. Integer Scaling
             ImGui::Text("Integer scaling (Escalado entero):");
@@ -1016,7 +1030,7 @@ extern "C" int run_snatcher_modern_launcher(char *disc_path_io, size_t disc_path
         fprintf(fset, "view_mode = %d\n", widescreen ? 1 : 0);
         fprintf(fset, "vsync = %d\n", vsync);
         fprintf(fset, "filter = %d\n", linear_filter);
-        fprintf(fset, "linear_filter = %d\n", (linear_filter == 1) ? 1 : 0);
+        fprintf(fset, "linear_filter = %d\n", (linear_filter == 1 || linear_filter == 3) ? 1 : 0);
         fprintf(fset, "integer_scaling = %d\n", integer_scaling);
         fprintf(fset, "color_mode = %d\n", color_mode);
         fprintf(fset, "volume = %d\n", volume);
