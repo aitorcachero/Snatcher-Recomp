@@ -132,12 +132,14 @@ extern "C" int run_snatcher_modern_launcher(char *disc_path_io, size_t disc_path
     int vsync = 1; // 1: VSync activado
     int integer_scaling = 0; // 0: Off, 1: On
     int color_mode = 1; // 1: As on a TV (cálido CRT)
+    char saved_disc[MAX_PATH] = { 0 };
 
     FILE *fset = fopen("settings.toml", "r");
     if (fset) {
-        char line[256];
+        char line[512];
         while (fgets(line, sizeof(line), fset)) {
             int v = 0;
+            char s[MAX_PATH] = { 0 };
             if (sscanf(line, "fullscreen = %d", &v) == 1) fullscreen = v;
             else if (sscanf(line, "window_scale = %d", &v) == 1) window_scale = v;
             else if (sscanf(line, "widescreen = %d", &v) == 1) widescreen = v;
@@ -152,8 +154,32 @@ extern "C" int run_snatcher_modern_launcher(char *disc_path_io, size_t disc_path
             else if (sscanf(line, "volume = %d", &v) == 1) volume = v;
             else if (sscanf(line, "mouse_enabled = %d", &v) == 1) mouse_enabled = v;
             else if (sscanf(line, "refresh_rate = %d", &v) == 1) refresh_rate = v;
+            else if (sscanf(line, "disc_path = \"%[^\"]\"", s) == 1 ||
+                     sscanf(line, "disc_path = %s", s) == 1 ||
+                     sscanf(line, "game_path = \"%[^\"]\"", s) == 1 ||
+                     sscanf(line, "game_path = %s", s) == 1) {
+                if (s[0] != '\0') strncpy(saved_disc, s, sizeof(saved_disc) - 1);
+            }
         }
         fclose(fset);
+    }
+
+    if (saved_disc[0] == '\0') {
+        FILE *fcfg = fopen("disc.cfg", "r");
+        if (fcfg) {
+            char line[MAX_PATH];
+            if (fgets(line, sizeof(line), fcfg)) {
+                char *p = line + strlen(line) - 1;
+                while (p >= line && (*p == '\r' || *p == '\n' || *p == ' ' || *p == '\t' || *p == '"')) {
+                    *p = '\0';
+                    p--;
+                }
+                char *start = line;
+                while (*start == ' ' || *start == '\t' || *start == '"') start++;
+                if (start[0] != '\0') strncpy(saved_disc, start, sizeof(saved_disc) - 1);
+            }
+            fclose(fcfg);
+        }
     }
 
     // 2. Obtener resolución del escritorio y crear ventana en PANTALLA COMPLETA
@@ -331,6 +357,11 @@ extern "C" int run_snatcher_modern_launcher(char *disc_path_io, size_t disc_path
     char current_disc[MAX_PATH] = { 0 };
     if (disc_path_io && disc_path_io[0]) {
         strncpy(current_disc, disc_path_io, sizeof(current_disc) - 1);
+    } else if (saved_disc[0] != '\0') {
+        strncpy(current_disc, saved_disc, sizeof(current_disc) - 1);
+        if (disc_path_io && disc_path_cap > 0) {
+            strncpy(disc_path_io, saved_disc, disc_path_cap - 1);
+        }
     }
 
     while (running) {
@@ -431,7 +462,7 @@ extern "C" int run_snatcher_modern_launcher(char *disc_path_io, size_t disc_path
         if (font_bold) ImGui::PopFont();
 
         if (font_regular) ImGui::PushFont(font_regular);
-        draw->AddText(ImVec2(28.0f * scale, win_h - 50.0f * scale), IM_COL32(148, 163, 184, 230), "PC Native Recompilation v1.0.5 • EPX Texto HD • Auto / 60 / 144 / 240 / 360 Hz");
+        draw->AddText(ImVec2(28.0f * scale, win_h - 50.0f * scale), IM_COL32(148, 163, 184, 230), "PC Native Recompilation v1.0.6 • EPX Texto HD • Auto / 60 / 144 / 240 / 360 Hz");
         if (font_regular) ImGui::PopFont();
 
         ImGui::EndChild();
@@ -524,6 +555,11 @@ extern "C" int run_snatcher_modern_launcher(char *disc_path_io, size_t disc_path
                 char picked[MAX_PATH] = { 0 };
                 if (prompt_browse_disc(window, picked, sizeof(picked))) {
                     strncpy(current_disc, picked, sizeof(current_disc) - 1);
+                    FILE *fcfg = fopen("disc.cfg", "w");
+                    if (fcfg) {
+                        fprintf(fcfg, "%s\n", current_disc);
+                        fclose(fcfg);
+                    }
                 }
             }
             ImGui::PopStyleVar();
@@ -1036,7 +1072,18 @@ extern "C" int run_snatcher_modern_launcher(char *disc_path_io, size_t disc_path
         fprintf(fset, "volume = %d\n", volume);
         fprintf(fset, "mouse_enabled = %d\n", mouse_enabled);
         fprintf(fset, "refresh_rate = %d\n", refresh_rate);
+        if (current_disc[0] != '\0') {
+            fprintf(fset, "disc_path = \"%s\"\n", current_disc);
+        }
         fclose(fset);
+    }
+
+    if (current_disc[0] != '\0') {
+        FILE *fcfg = fopen("disc.cfg", "w");
+        if (fcfg) {
+            fprintf(fcfg, "%s\n", current_disc);
+            fclose(fcfg);
+        }
     }
 
     if (current_disc[0] != '\0' && disc_path_io && disc_path_cap > 0) {

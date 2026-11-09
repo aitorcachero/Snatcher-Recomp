@@ -202,6 +202,97 @@ static int is_file_ext(const char *path, const char *ext) {
     return _stricmp(path + len - elen, ext) == 0;
 }
 
+static void persist_disc_path(const char *path) {
+    if (!path || path[0] == '\0') return;
+
+    // 1. Guardar en disc.cfg
+    FILE *fcfg = fopen("disc.cfg", "w");
+    if (fcfg) {
+        fprintf(fcfg, "%s\n", path);
+        fclose(fcfg);
+    }
+
+    // 2. Actualizar o añadir disc_path en settings.toml
+    char toml_lines[128][512];
+    int line_count = 0;
+    int disc_found = 0;
+
+    FILE *fr = fopen("settings.toml", "r");
+    if (fr) {
+        char buf[512];
+        while (fgets(buf, sizeof(buf), fr) && line_count < 120) {
+            if (strncmp(buf, "disc_path =", 11) == 0 || strncmp(buf, "game_path =", 11) == 0) {
+                snprintf(toml_lines[line_count++], sizeof(toml_lines[0]), "disc_path = \"%s\"\n", path);
+                disc_found = 1;
+            } else {
+                strncpy(toml_lines[line_count++], buf, sizeof(toml_lines[0]) - 1);
+                toml_lines[line_count - 1][sizeof(toml_lines[0]) - 1] = '\0';
+            }
+        }
+        fclose(fr);
+    }
+
+    if (!disc_found) {
+        snprintf(toml_lines[line_count++], sizeof(toml_lines[0]), "disc_path = \"%s\"\n", path);
+    }
+
+    FILE *fw = fopen("settings.toml", "w");
+    if (fw) {
+        for (int i = 0; i < line_count; i++) {
+            fputs(toml_lines[i], fw);
+        }
+        fclose(fw);
+    }
+}
+
+static int load_saved_disc_path(char *out_path, size_t out_max) {
+    if (!out_path || out_max == 0) return 0;
+    out_path[0] = '\0';
+
+    // 1. Intentar desde settings.toml
+    FILE *fset = fopen("settings.toml", "r");
+    if (fset) {
+        char line[512];
+        while (fgets(line, sizeof(line), fset)) {
+            char s[MAX_PATH] = { 0 };
+            if (sscanf(line, "disc_path = \"%[^\"]\"", s) == 1 ||
+                sscanf(line, "disc_path = %s", s) == 1 ||
+                sscanf(line, "game_path = \"%[^\"]\"", s) == 1 ||
+                sscanf(line, "game_path = %s", s) == 1) {
+                if (s[0] != '\0' && file_exists_and_size(s, NULL)) {
+                    strncpy(out_path, s, out_max - 1);
+                    fclose(fset);
+                    return 1;
+                }
+            }
+        }
+        fclose(fset);
+    }
+
+    // 2. Intentar desde disc.cfg
+    FILE *fcfg = fopen("disc.cfg", "r");
+    if (fcfg) {
+        char line[MAX_PATH];
+        if (fgets(line, sizeof(line), fcfg)) {
+            char *p = line + strlen(line) - 1;
+            while (p >= line && (*p == '\r' || *p == '\n' || *p == ' ' || *p == '\t' || *p == '"')) {
+                *p = '\0';
+                p--;
+            }
+            char *start = line;
+            while (*start == ' ' || *start == '\t' || *start == '"') start++;
+            if (start[0] != '\0' && file_exists_and_size(start, NULL)) {
+                strncpy(out_path, start, out_max - 1);
+                fclose(fcfg);
+                return 1;
+            }
+        }
+        fclose(fcfg);
+    }
+
+    return 0;
+}
+
 static int prepare_disc_image(const char *input_path, char *out_disc_path, size_t out_max) {
     if (!input_path || input_path[0] == '\0') return 0;
 
@@ -214,9 +305,9 @@ static int prepare_disc_image(const char *input_path, char *out_disc_path, size_
         return 0;
     }
 
-    // Si es un .bin
+    // Si es un .bin o .iso
     char cue_file[MAX_PATH] = { 0 };
-    if (is_file_ext(input_path, ".bin")) {
+    if (is_file_ext(input_path, ".bin") || is_file_ext(input_path, ".iso")) {
         if (!ensure_snatcher_cue_exists(input_path, cue_file, sizeof(cue_file))) {
             return 0;
         }
@@ -226,18 +317,23 @@ static int prepare_disc_image(const char *input_path, char *out_disc_path, size_
     // Si es un .cue
     if (is_file_ext(input_path, ".cue")) {
         char target_sgcd[MAX_PATH] = { 0 };
-        if (strstr(input_path, "disc") != NULL) {
-            strncpy(target_sgcd, "disc/snatcher.sgcd", sizeof(target_sgcd) - 1);
-        } else {
-            strncpy(target_sgcd, input_path, sizeof(target_sgcd) - 1);
-            char *dot = strrchr(target_sgcd, '.');
-            if (dot) strcpy(dot, ".sgcd");
-        }
+        CreateDirectoryA("disc", NULL);
+        strncpy(target_sgcd, "disc/snatcher.sgcd", sizeof(target_sgcd) - 1);
 
-        // Si ya existe el .sgcd y tiene tamano suficiente (> 10 MB)
+        // Si ya existe el .sgcd en disc/snatcher.sgcd y tiene tamano suficiente (> 10 MB)
         size_t sz = 0;
         if (file_exists_and_size(target_sgcd, &sz) && sz > 10 * 1024 * 1024) {
             strncpy(out_disc_path, target_sgcd, out_max - 1);
+            return 1;
+        }
+
+        // Si ya existe junto al propio archivo .cue
+        char side_sgcd[MAX_PATH] = { 0 };
+        strncpy(side_sgcd, input_path, sizeof(side_sgcd) - 1);
+        char *dot = strrchr(side_sgcd, '.');
+        if (dot) strcpy(dot, ".sgcd");
+        if (file_exists_and_size(side_sgcd, &sz) && sz > 10 * 1024 * 1024) {
+            strncpy(out_disc_path, side_sgcd, out_max - 1);
             return 1;
         }
 
@@ -247,11 +343,13 @@ static int prepare_disc_image(const char *input_path, char *out_disc_path, size_
         log_debug(log_buf);
 
         char err[512] = { 0 };
-        CreateDirectoryA("disc", NULL);
         if (!convert_cue_to_sgcd(input_path, target_sgcd, err, sizeof(err))) {
-            log_debug(err);
-            MessageBoxA(NULL, err, "Error al procesar CUE de Snatcher", MB_ICONERROR);
-            return 0;
+            if (!convert_cue_to_sgcd(input_path, side_sgcd, err, sizeof(err))) {
+                log_debug(err);
+                MessageBoxA(NULL, err, "Error al procesar CUE de Snatcher", MB_ICONERROR);
+                return 0;
+            }
+            strncpy(target_sgcd, side_sgcd, sizeof(target_sgcd) - 1);
         }
 
         log_debug("Conversion to SGCD completed successfully.");
@@ -386,10 +484,15 @@ int main(int argc, char **argv) {
 
     // 1. Deteccion automatica de la imagen de disco de Snatcher
     log_debug("Step 1: checking disc...");
+    if (disc_path[0] == '\0') {
+        load_saved_disc_path(disc_path, sizeof(disc_path));
+    }
+
     if (disc_path[0] != '\0') {
         char prepared[MAX_PATH] = { 0 };
         if (prepare_disc_image(disc_path, prepared, sizeof(prepared))) {
             strncpy(disc_path, prepared, sizeof(disc_path) - 1);
+            persist_disc_path(disc_path);
         }
     }
 
@@ -407,6 +510,7 @@ int main(int argc, char **argv) {
         for (int i = 0; sgcd_candidates[i] != NULL; i++) {
             if (file_exists_and_size(sgcd_candidates[i], NULL)) {
                 strncpy(disc_path, sgcd_candidates[i], sizeof(disc_path) - 1);
+                persist_disc_path(disc_path);
                 break;
             }
         }
@@ -419,6 +523,7 @@ int main(int argc, char **argv) {
         if (hFind != INVALID_HANDLE_VALUE) {
             snprintf(disc_path, sizeof(disc_path), "disc\\%s", ffd.cFileName);
             FindClose(hFind);
+            persist_disc_path(disc_path);
         }
     }
 
@@ -443,6 +548,7 @@ int main(int argc, char **argv) {
                 char prepared[MAX_PATH] = { 0 };
                 if (prepare_disc_image(cue_candidates[i], prepared, sizeof(prepared))) {
                     strncpy(disc_path, prepared, sizeof(disc_path) - 1);
+                    persist_disc_path(disc_path);
                     break;
                 }
             }
@@ -460,17 +566,20 @@ int main(int argc, char **argv) {
             char prepared[MAX_PATH] = { 0 };
             if (prepare_disc_image(found_cue, prepared, sizeof(prepared))) {
                 strncpy(disc_path, prepared, sizeof(disc_path) - 1);
+                persist_disc_path(disc_path);
             }
         }
     }
 
     if (disc_path[0] == '\0') {
-        // 1e. Buscar SNATCHER.BIN en disc/ (si el usuario solo coloco el .bin)
+        // 1e. Buscar SNATCHER.BIN o SNATCHER.ISO en disc/
         const char *bin_candidates[] = {
             "disc/SNATCHER.BIN",
             "disc/snatcher.bin",
             "SNATCHER.BIN",
             "snatcher.bin",
+            "disc/SNATCHER.ISO",
+            "disc/snatcher.iso",
             NULL
         };
         for (int i = 0; bin_candidates[i] != NULL; i++) {
@@ -478,6 +587,7 @@ int main(int argc, char **argv) {
                 char prepared[MAX_PATH] = { 0 };
                 if (prepare_disc_image(bin_candidates[i], prepared, sizeof(prepared))) {
                     strncpy(disc_path, prepared, sizeof(disc_path) - 1);
+                    persist_disc_path(disc_path);
                     break;
                 }
             }
@@ -490,6 +600,46 @@ int main(int argc, char **argv) {
 
     // 2. Deteccion automatica de BIOS de Sega CD (128 KB)
     log_debug("Step 2: checking BIOS...");
+    if (bios_path[0] == '\0') {
+        FILE *fset = fopen("settings.toml", "r");
+        if (fset) {
+            char line[512];
+            while (fgets(line, sizeof(line), fset)) {
+                char s[MAX_PATH] = { 0 };
+                if (sscanf(line, "bios_path = \"%[^\"]\"", s) == 1 ||
+                    sscanf(line, "bios_path = %s", s) == 1) {
+                    size_t sz = 0;
+                    if (s[0] != '\0' && file_exists_and_size(s, &sz) && sz == SEGACD_BIOS_BYTES) {
+                        strncpy(bios_path, s, sizeof(bios_path) - 1);
+                        break;
+                    }
+                }
+            }
+            fclose(fset);
+        }
+    }
+
+    if (bios_path[0] == '\0') {
+        FILE *fbios = fopen("bios.cfg", "r");
+        if (fbios) {
+            char line[MAX_PATH];
+            if (fgets(line, sizeof(line), fbios)) {
+                char *p = line + strlen(line) - 1;
+                while (p >= line && (*p == '\r' || *p == '\n' || *p == ' ' || *p == '\t' || *p == '"')) {
+                    *p = '\0';
+                    p--;
+                }
+                char *start = line;
+                while (*start == ' ' || *start == '\t' || *start == '"') start++;
+                size_t sz = 0;
+                if (start[0] != '\0' && file_exists_and_size(start, &sz) && sz == SEGACD_BIOS_BYTES) {
+                    strncpy(bios_path, start, sizeof(bios_path) - 1);
+                }
+            }
+            fclose(fbios);
+        }
+    }
+
     if (bios_path[0] == '\0') {
         const char *bios_candidates[] = {
             "bios/us_scd1_9210.bin",
@@ -577,17 +727,22 @@ int main(int argc, char **argv) {
             if (prepare_disc_image(disc_path, prepared, sizeof(prepared))) {
                 strncpy(disc_path, prepared, sizeof(disc_path) - 1);
             }
+            persist_disc_path(disc_path);
         }
     }
 
     if (disc_path[0] == '\0') {
         char picked[MAX_PATH] = { 0 };
-        if (prompt_select_file("Selecciona la imagen de Snatcher (.sgcd, .cue, .bin)",
-                               "Imagenes Sega CD (*.sgcd;*.cue;*.bin)\0*.sgcd;*.cue;*.bin\0Todos (*.*)\0*.*\0",
+        if (prompt_select_file("Selecciona la imagen de Snatcher (.sgcd, .cue, .bin, .iso)",
+                               "Imagenes Sega CD (*.sgcd;*.cue;*.bin;*.iso)\0*.sgcd;*.cue;*.bin;*.iso\0Todos (*.*)\0*.*\0",
                                picked, sizeof(picked))) {
             char prepared[MAX_PATH] = { 0 };
             if (prepare_disc_image(picked, prepared, sizeof(prepared))) {
                 strncpy(disc_path, prepared, sizeof(disc_path) - 1);
+                persist_disc_path(disc_path);
+            } else {
+                strncpy(disc_path, picked, sizeof(disc_path) - 1);
+                persist_disc_path(disc_path);
             }
         }
     }
@@ -613,6 +768,11 @@ int main(int argc, char **argv) {
                 CreateDirectoryA("bios", NULL);
                 CopyFileA(picked, "bios\\segacd_bios.bin", FALSE);
                 strncpy(bios_path, picked, sizeof(bios_path) - 1);
+                FILE *fbios = fopen("bios.cfg", "w");
+                if (fbios) {
+                    fprintf(fbios, "%s\n", picked);
+                    fclose(fbios);
+                }
             }
         }
     }
